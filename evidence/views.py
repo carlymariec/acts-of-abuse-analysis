@@ -17,6 +17,9 @@ def generate_timeline(case_events):
         if event.is_verified
     ]
 
+    if not data:
+        # No verified events to display; return an empty-state HTML fragment
+        return "<p>No verified events available to display timeline.</p>"
     # Scatter plot with time on x-axis, severity on y-axis, colour-coded by sender
     fig = px.scatter(
         data,
