@@ -23,7 +23,7 @@ class AnalyzedEvent(models.Model):
     severity_score = models.IntegerField(default=1)
 
     # Human-in-the-loop verification
-    is_verified = models.BooleanField(default=False)
+    is_verified = models.BooleanField(default=False, db_index=True)
     user_context_notes = models.TextField(blank=True)
 
     def __str__(self):
