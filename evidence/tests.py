@@ -1,163 +1,333 @@
-import unittest
 import hashlib
-from datetime import datetime, timedelta
+import json
+import os
+import tempfile
+from datetime import datetime
 
 from django.test import TestCase
 
-# Optional imports of application modules. Tests are skipped if these are absent.
-try:
-    from . import hashing
-except ImportError:
-    hashing = None
+from evidence.analysis_engine import CoerciveControlEngine
+from evidence.ingestion import compute_file_hash, import_parser, process_upload
+from evidence.views import generate_timeline
 
-try:
-    from . import parsers
-except ImportError:
-    parsers = None
 
-try:
-    from . import analysis
-except ImportError:
-    analysis = None
-
-try:
-    from . import timeline
-except ImportError:
-    timeline = None
-
+# ---------------------------------------------------------------------------
+# Hash computation
+# ---------------------------------------------------------------------------
 
 class HashComputationTests(TestCase):
-    """
-    Tests for hash computation accuracy.
-
-    These tests compare the application's hash computation (if available)
-    against Python's hashlib implementation on known inputs.
-    """
-
-    @unittest.skipIf(
-        hashing is None or not hasattr(hashing, "compute_hash"),
-        "hashing.compute_hash not available; skipping hash computation tests.",
-    )
-    def test_sha256_hash_matches_hashlib(self):
+    def test_sha256_matches_hashlib(self):
         data = b"forensic-evidence-sample"
-        expected = hashlib.sha256(data).hexdigest()
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(data)
+            tmp = f.name
+        try:
+            expected = hashlib.sha256(data).hexdigest()
+            self.assertEqual(compute_file_hash(tmp), expected)
+        finally:
+            os.unlink(tmp)
 
-        # Assume the application uses SHA-256 by default.
-        actual = hashing.compute_hash(data)
+    def test_hash_is_64_hex_chars(self):
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"test")
+            tmp = f.name
+        try:
+            h = compute_file_hash(tmp)
+            self.assertEqual(len(h), 64)
+            self.assertTrue(all(c in "0123456789abcdef" for c in h))
+        finally:
+            os.unlink(tmp)
 
-        self.assertEqual(
-            actual,
-            expected,
-            "Application hash output must match hashlib.sha256 for known input.",
+
+# ---------------------------------------------------------------------------
+# Parser whitelist / injection guard
+# ---------------------------------------------------------------------------
+
+class IngestionWhitelistTests(TestCase):
+    def test_allowed_parser_loads(self):
+        parser = import_parser('generic')
+        self.assertTrue(hasattr(parser, 'extract_data'))
+
+    def test_unknown_parser_raises(self):
+        with self.assertRaises(ValueError):
+            import_parser('evil_module')
+
+    def test_whitelist_case_insensitive(self):
+        parser = import_parser('WhatsApp')
+        self.assertTrue(hasattr(parser, 'extract_data'))
+
+
+# ---------------------------------------------------------------------------
+# Generic parser
+# ---------------------------------------------------------------------------
+
+class GenericParserTests(TestCase):
+    def _write_tmp(self, content, suffix='.txt'):
+        f = tempfile.NamedTemporaryFile(
+            mode='w', suffix=suffix, delete=False, encoding='utf-8'
         )
+        f.write(content)
+        f.close()
+        return f.name
+
+    def test_parses_plain_lines(self):
+        tmp = self._write_tmp("Hello world\nSecond line\n")
+        try:
+            msgs = import_parser('generic').extract_data(tmp)
+            self.assertEqual(len(msgs), 2)
+            self.assertEqual(msgs[0]['content'], 'Hello world')
+        finally:
+            os.unlink(tmp)
+
+    def test_empty_file_returns_empty_list(self):
+        tmp = self._write_tmp("")
+        try:
+            msgs = import_parser('generic').extract_data(tmp)
+            self.assertEqual(msgs, [])
+        finally:
+            os.unlink(tmp)
 
 
-class ParserTests(TestCase):
-    """
-    Tests for parser correctness.
+# ---------------------------------------------------------------------------
+# WhatsApp parser
+# ---------------------------------------------------------------------------
 
-    These tests validate that a generic parse_evidence function (if provided)
-    can successfully parse a minimal, well-formed input.
-    """
+class WhatsAppParserTests(TestCase):
+    def _write_tmp(self, content):
+        f = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.txt', delete=False, encoding='utf-8'
+        )
+        f.write(content)
+        f.close()
+        return f.name
 
-    @unittest.skipIf(
-        parsers is None or not hasattr(parsers, "parse_evidence"),
-        "parsers.parse_evidence not available; skipping parser tests.",
-    )
-    def test_parser_returns_non_empty_result_for_valid_input(self):
-        # Minimal, synthetic input representing an evidence record.
-        sample_input = {
-            "id": "EV-001",
-            "timestamp": "2024-01-01T12:00:00Z",
-            "source": "disk-image",
-            "data": "example payload",
+    def test_parses_basic_message(self):
+        tmp = self._write_tmp(
+            "01/15/2024, 10:30:00 - Alice: Hello there\n"
+        )
+        try:
+            msgs = import_parser('whatsapp').extract_data(tmp)
+            self.assertEqual(len(msgs), 1)
+            self.assertEqual(msgs[0]['sender'], 'Alice')
+            self.assertEqual(msgs[0]['content'], 'Hello there')
+        finally:
+            os.unlink(tmp)
+
+    def test_continuation_line_merged(self):
+        tmp = self._write_tmp(
+            "01/15/2024, 10:30:00 - Alice: First line\n"
+            "second line continued\n"
+        )
+        try:
+            msgs = import_parser('whatsapp').extract_data(tmp)
+            self.assertEqual(len(msgs), 1)
+            self.assertIn("second line continued", msgs[0]['content'])
+        finally:
+            os.unlink(tmp)
+
+
+# ---------------------------------------------------------------------------
+# Facebook parser
+# ---------------------------------------------------------------------------
+
+class FacebookParserTests(TestCase):
+    def _write_json(self, data):
+        f = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.json', delete=False, encoding='utf-8'
+        )
+        json.dump(data, f)
+        f.close()
+        return f.name
+
+    def test_parses_messages(self):
+        payload = {
+            "participants": [{"name": "Alice"}],
+            "messages": [
+                {"sender_name": "Alice", "timestamp_ms": 1705312200000, "content": "Hi"},
+                {"sender_name": "Bob", "timestamp_ms": 1705312260000, "content": "Hey"},
+            ],
         }
+        tmp = self._write_json(payload)
+        try:
+            msgs = import_parser('facebook').extract_data(tmp)
+            self.assertEqual(len(msgs), 2)
+            self.assertEqual(msgs[0]['sender'], 'Alice')
+        finally:
+            os.unlink(tmp)
 
-        result = parsers.parse_evidence(sample_input)
-
-        self.assertIsNotNone(result, "Parser should not return None for valid input.")
-        # At minimum, expect some structured object or dict-like content.
-        self.assertTrue(
-            bool(result),
-            "Parser should return a non-empty structure for valid input.",
+    def test_invalid_json_raises(self):
+        f = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.json', delete=False, encoding='utf-8'
         )
+        f.write("not valid json{{{")
+        f.close()
+        try:
+            with self.assertRaises(ValueError):
+                import_parser('facebook').extract_data(f.name)
+        finally:
+            os.unlink(f.name)
 
 
-class AnalysisEngineTests(TestCase):
-    """
-    Tests for analysis engine pattern detection.
+# ---------------------------------------------------------------------------
+# Discord parser
+# ---------------------------------------------------------------------------
 
-    These tests feed a small synthetic dataset and check that at least one
-    pattern is detected when the analysis module exposes detect_patterns.
-    """
+class DiscordParserTests(TestCase):
+    def test_invalid_json_raises(self):
+        f = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.json', delete=False, encoding='utf-8'
+        )
+        f.write("not valid json{{{")
+        f.close()
+        try:
+            with self.assertRaises(ValueError):
+                import_parser('discord').extract_data(f.name)
+        finally:
+            os.unlink(f.name)
 
-    @unittest.skipIf(
-        analysis is None or not hasattr(analysis, "detect_patterns"),
-        "analysis.detect_patterns not available; skipping analysis tests.",
-    )
-    def test_analysis_detects_basic_pattern(self):
-        # Synthetic events that should trigger at least one detectable pattern.
+    def test_parses_messages(self):
+        payload = {
+            "guild": {"name": "Test Server"},
+            "messages": [
+                {
+                    "author": {"name": "Alice"},
+                    "timestamp": "2024-01-15T10:30:00+00:00",
+                    "content": "Hello",
+                }
+            ],
+        }
+        f = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.json', delete=False, encoding='utf-8'
+        )
+        json.dump(payload, f)
+        f.close()
+        try:
+            msgs = import_parser('discord').extract_data(f.name)
+            self.assertEqual(len(msgs), 1)
+            self.assertEqual(msgs[0]['sender'], 'Alice')
+        finally:
+            os.unlink(f.name)
+
+
+# ---------------------------------------------------------------------------
+# Process upload — JSON platform detection
+# ---------------------------------------------------------------------------
+
+class ProcessUploadDetectionTests(TestCase):
+    def test_detects_facebook(self):
+        payload = {
+            "participants": [{"name": "Alice"}],
+            "messages": [
+                {"sender_name": "Alice", "timestamp_ms": 1705312200000, "content": "Hi"},
+            ],
+        }
+        f = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.json', delete=False, encoding='utf-8'
+        )
+        json.dump(payload, f)
+        f.close()
+        try:
+            msgs = process_upload(f.name)
+            self.assertEqual(len(msgs), 1)
+        finally:
+            os.unlink(f.name)
+
+    def test_txt_falls_through_to_whatsapp(self):
+        f = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.txt', delete=False, encoding='utf-8'
+        )
+        f.write("01/15/2024, 10:30:00 - Alice: Hello\n")
+        f.close()
+        try:
+            msgs = process_upload(f.name)
+            self.assertIsInstance(msgs, list)
+        finally:
+            os.unlink(f.name)
+
+
+# ---------------------------------------------------------------------------
+# Analysis engine
+# ---------------------------------------------------------------------------
+
+class CoerciveControlEngineTests(TestCase):
+    def setUp(self):
+        self.engine = CoerciveControlEngine()
+
+    def test_baseline_severity(self):
+        r = self.engine.analyze_message("Hello, how are you?")
+        self.assertEqual(r['severity'], 1)
+
+    def test_duluth_category_detected(self):
+        r = self.engine.analyze_message("You are worthless and I will isolate you.")
+        self.assertGreaterEqual(r['severity'], 2)
+        self.assertTrue(len(r['categories']) > 0)
+
+    def test_no_duplicate_categories(self):
+        r = self.engine.analyze_message(
+            "You are worthless and pathetic, you are nothing."
+        )
+        self.assertEqual(len(r['categories']), len(set(r['categories'])))
+
+    def test_economic_abuse_detected(self):
+        r = self.engine.analyze_message("I drained the account and called your boss.")
+        self.assertGreaterEqual(r['severity'], 3)
+        self.assertIn('Controlling Assets and Draining Accounts', r['economic_abuse_flags'])
+        self.assertIn('Sabotaging Employment', r['economic_abuse_flags'])
+
+    def test_child_abuse_detected(self):
+        r = self.engine.analyze_message("I am not returning the kids this weekend.")
+        self.assertGreaterEqual(r['severity'], 3)
+        self.assertTrue(len(r['child_abuse_flags']) > 0)
+
+    def test_darvo_detected(self):
+        r = self.engine.analyze_message("It never happened, you are crazy.")
+        self.assertIn('Deny', r['darvo_flags'])
+        self.assertIn('Attack', r['darvo_flags'])
+
+    def test_no_duplicate_darvo_flags(self):
+        r = self.engine.analyze_message("crazy liar unstable bitch")
+        self.assertEqual(len(r['darvo_flags']), len(set(r['darvo_flags'])))
+
+    def test_institutional_severity_uses_max(self):
+        r = self.engine.analyze_message(
+            "I am not returning the kids and the judge will take them."
+        )
+        self.assertEqual(r['severity'], 4)
+        self.assertTrue(r['institutional_abuse'])
+
+
+# ---------------------------------------------------------------------------
+# Timeline generation
+# ---------------------------------------------------------------------------
+
+class GenerateTimelineTests(TestCase):
+    class _Event:
+        def __init__(self, ts, sender, score, notes, verified):
+            self.timestamp = ts
+            self.sender = sender
+            self.severity_score = score
+            self.user_context_notes = notes
+            self.is_verified = verified
+
+    def test_empty_events_returns_fallback(self):
+        html = generate_timeline([])
+        self.assertIn("No verified events", html)
+
+    def test_all_unverified_returns_fallback(self):
+        events = [self._Event(datetime(2024, 1, 1), 'Alice', 2, '', False)]
+        html = generate_timeline(events)
+        self.assertIn("No verified events", html)
+
+    def test_null_timestamp_excluded(self):
+        events = [self._Event(None, 'Alice', 2, '', True)]
+        html = generate_timeline(events)
+        self.assertIn("No verified events", html)
+
+    def test_verified_events_produce_plotly_html(self):
         events = [
-            {"id": "EV-100", "timestamp": "2024-01-01T00:00:00Z", "actor": "userA", "action": "login"},
-            {"id": "EV-101", "timestamp": "2024-01-01T00:05:00Z", "actor": "userA", "action": "access_sensitive_file"},
-            {"id": "EV-102", "timestamp": "2024-01-01T00:06:00Z", "actor": "userA", "action": "logout"},
+            self._Event(datetime(2024, 1, 10), 'Alice', 3, 'Note', True),
+            self._Event(datetime(2024, 1, 11), 'Bob', 1, '', False),   # excluded
+            self._Event(datetime(2024, 1, 12), 'Alice', 4, 'CPS', True),
         ]
-
-        patterns = analysis.detect_patterns(events)
-
-        self.assertIsNotNone(patterns, "Pattern detection should not return None.")
-        self.assertTrue(
-            bool(patterns),
-            "Analysis engine should detect at least one pattern in synthetic data.",
-        )
-
-
-class TimelineGenerationTests(TestCase):
-    """
-    Tests for timeline generation, including ordering and edge cases.
-
-    These tests assume a generate_timeline function that accepts a collection
-    of events and returns them ordered chronologically.
-    """
-
-    @unittest.skipIf(
-        timeline is None or not hasattr(timeline, "generate_timeline"),
-        "timeline.generate_timeline not available; skipping timeline tests.",
-    )
-    def test_timeline_is_sorted_by_timestamp(self):
-        base = datetime(2024, 1, 1, 12, 0, 0)
-        events = [
-            {"id": "EV-3", "timestamp": base + timedelta(minutes=5)},
-            {"id": "EV-1", "timestamp": base},
-            {"id": "EV-2", "timestamp": base + timedelta(minutes=1)},
-        ]
-
-        ordered = timeline.generate_timeline(events)
-
-        # Extract timestamps in the order returned and verify monotonicity.
-        timestamps = [e["timestamp"] for e in ordered]
-        self.assertEqual(
-            sorted(timestamps),
-            timestamps,
-            "Timeline events must be returned in chronological order.",
-        )
-
-    @unittest.skipIf(
-        timeline is None or not hasattr(timeline, "generate_timeline"),
-        "timeline.generate_timeline not available; skipping timeline tests.",
-    )
-    def test_timeline_handles_identical_timestamps(self):
-        ts = datetime(2024, 1, 1, 13, 0, 0)
-        events = [
-            {"id": "EV-10", "timestamp": ts, "seq": 2},
-            {"id": "EV-9", "timestamp": ts, "seq": 1},
-        ]
-
-        ordered = timeline.generate_timeline(events)
-
-        # All events share the same timestamp; at minimum, they must all be present.
-        self.assertEqual(
-            {e["id"] for e in events},
-            {e["id"] for e in ordered},
-            "Timeline must preserve all events even when timestamps are identical.",
-        )
+        html = generate_timeline(events)
+        self.assertIn('plotly', html.lower())

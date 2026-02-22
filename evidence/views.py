@@ -4,7 +4,7 @@ import plotly.express as px
 def generate_timeline(case_events):
     """
     Creates the interactive chronological timeline infographic.
-    Only includes events that have been human-verified.
+    Only includes events that have been human-verified and have a known timestamp.
     """
     data = [
         {
@@ -14,8 +14,11 @@ def generate_timeline(case_events):
             'Context': event.user_context_notes,
         }
         for event in case_events
-        if event.is_verified
+        if event.is_verified and event.timestamp is not None
     ]
+
+    if not data:
+        return "<p>No verified events available to display timeline.</p>"
 
     # Scatter plot with time on x-axis, severity on y-axis, colour-coded by sender
     fig = px.scatter(

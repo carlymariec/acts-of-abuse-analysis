@@ -12,8 +12,13 @@ def extract_data(file_path):
     Each dict contains: timestamp (datetime), sender (str), content (str).
     """
     messages = []
-    with open(file_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid Discord export JSON file '{file_path}': {e}"
+            ) from e
 
     for msg in data.get('messages', []):
         ts_str = msg.get('timestamp', '')

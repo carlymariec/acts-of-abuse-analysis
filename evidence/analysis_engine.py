@@ -255,6 +255,6 @@ class CoerciveControlEngine:
         # Systemic/Institutional Detection
         if any(word in text_lower for word in self.systemic_abuse):
             results['institutional_abuse'] = True
-            results['severity'] = 4  # Critical risk level
+            results['severity'] = max(results['severity'], 4)  # Critical risk level
 
         return results

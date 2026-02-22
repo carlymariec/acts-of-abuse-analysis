@@ -2,10 +2,7 @@
 Facebook Messenger JSON export parser.
 """
 import json
-from datetime import datetime
-
-
-from datetime import timezone
+from datetime import datetime, timezone
 
 
 def extract_data(file_path):
@@ -14,8 +11,19 @@ def extract_data(file_path):
     Each dict contains: timestamp (datetime), sender (str), content (str).
     """
     messages = []
-    with open(file_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON in Facebook export file '{file_path}': {e}"
+            ) from e
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Unexpected JSON structure in Facebook export file '{file_path}': "
+            "expected a JSON object at the top level."
+        )
 
     for msg in data.get('messages', []):
         ts_ms = msg.get('timestamp_ms')

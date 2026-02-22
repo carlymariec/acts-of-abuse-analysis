@@ -21,13 +21,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-ul68urgo5uyrk_2ui#a_u8*trx&1dtxn96e6x!&rk5*8hw8@q(',
-)
+_default_secret = 'django-insecure-ul68urgo5uyrk_2ui#a_u8*trx&1dtxn96e6x!&rk5*8hw8@q('
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', _default_secret)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False') == 'True'
+
+# Enforce a real SECRET_KEY in production
+if not DEBUG and SECRET_KEY == _default_secret:
+    raise RuntimeError(
+        "DJANGO_SECRET_KEY environment variable must be set to a unique, "
+        "unpredictable value before running in production (DEBUG=False)."
+    )
 
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
 
@@ -122,7 +127,23 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Media files (user-uploaded evidence)
+# https://docs.djangoproject.com/en/5.1/topics/files/
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Production security settings — active only when DEBUG is False
+# https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_BROWSER_XSS_FILTER = True

@@ -1,8 +1,12 @@
 import importlib
 import hashlib
+import json
 
 # Read files in 64 KB chunks to keep memory usage constant for large evidence files
 _HASH_CHUNK_SIZE = 65536
+
+# Whitelist of allowed parser module names to prevent module-injection attacks
+_ALLOWED_PARSERS = frozenset({'whatsapp', 'facebook', 'discord', 'pdf', 'generic'})
 
 
 def compute_file_hash(file_path):
@@ -19,13 +23,44 @@ def compute_file_hash(file_path):
 def import_parser(platform_name):
     """
     Dynamically imports the correct parser module using importlib.
+    Only modules from the pre-approved whitelist are allowed.
     """
+    name = platform_name.lower()
+    if name not in _ALLOWED_PARSERS:
+        raise ValueError(
+            f"'{platform_name}' is not a recognised parser. "
+            f"Allowed parsers: {sorted(_ALLOWED_PARSERS)}"
+        )
     try:
-        # Uses import_module to dynamically load the specific format parser
-        parser_module = importlib.import_module(f'parsers.{platform_name.lower()}')
+        parser_module = importlib.import_module(f'parsers.{name}')
         return parser_module
     except ImportError as e:
         raise ValueError(f"Parser for {platform_name} not found.") from e
+
+
+def _detect_json_platform(file_path):
+    """
+    Parse the JSON structure to reliably identify the export platform.
+    Returns 'facebook', 'discord', or None.
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    # Facebook Messenger exports have top-level 'participants' and 'messages' keys
+    if 'participants' in data and 'messages' in data:
+        return 'facebook'
+
+    # Discord exports (DiscordChatExporter) have a top-level 'guild' or 'channel' key
+    if 'guild' in data or 'channel' in data:
+        return 'discord'
+
+    return None
 
 
 def process_upload(file_path):
@@ -35,12 +70,7 @@ def process_upload(file_path):
     """
     platform = None
     if file_path.endswith('.json'):
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read(500)
-            if 'messages' in content and 'participants' in content:
-                platform = 'facebook'  # Facebook Messenger (JSON & HTML)
-            elif 'guild' in content:
-                platform = 'discord'   # Discord JSON exports
+        platform = _detect_json_platform(file_path)
     elif file_path.endswith('.txt'):
         platform = 'whatsapp'  # WhatsApp txt exports
     elif file_path.endswith('.pdf'):

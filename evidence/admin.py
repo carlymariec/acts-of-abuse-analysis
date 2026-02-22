@@ -1,3 +1,6 @@
 from django.contrib import admin
 
-# Register your models here.
+from .models import AnalyzedEvent, ForensicEvidence
+
+admin.site.register(ForensicEvidence)
+admin.site.register(AnalyzedEvent)
