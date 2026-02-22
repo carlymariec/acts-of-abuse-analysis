@@ -15,7 +15,7 @@ class ForensicEvidence(models.Model):
 
 class AnalyzedEvent(models.Model):
     evidence = models.ForeignKey(ForensicEvidence, on_delete=models.CASCADE)
-    timestamp = models.DateTimeField()  # For the chronological timeline
+    timestamp = models.DateTimeField(db_index=True)  # For the chronological timeline
     sender = models.CharField(max_length=255)
     content = models.TextField()
 
