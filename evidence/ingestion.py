@@ -31,11 +31,14 @@ def import_parser(platform_name):
             f"'{platform_name}' is not a recognised parser. "
             f"Allowed parsers: {sorted(_ALLOWED_PARSERS)}"
         )
-    try:
-        parser_module = importlib.import_module(f'parsers.{name}')
-        return parser_module
-    except ImportError as e:
-        raise ValueError(f"Parser for {platform_name} not found.") from e
+    # Try the canonical evidence.parsers namespace first; fall back to the
+    # top-level parsers package for backward compatibility.
+    for module_path in (f'evidence.parsers.{name}', f'parsers.{name}'):
+        try:
+            return importlib.import_module(module_path)
+        except ImportError:
+            continue
+    raise ValueError(f"Parser for {platform_name} not found.")
 
 
 def _detect_json_platform(file_path):
