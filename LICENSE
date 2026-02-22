@@ -1,0 +1,20 @@
+LICENSE
+
+Copyright (c) [YEAR] [YOUR FULL NAME / SOLE PROPRIETOR BUSINESS NAME]
+All rights reserved.
+
+NOTICE: This file is a placeholder. The repository owner must replace the
+contents of this file with their own licence terms before distributing or
+deploying this software.
+
+Suggested licence type for a private forensic analysis tool with strict
+usage controls: a custom proprietary (sole-proprietor) licence that:
+
+  1. Reserves all rights to the author.
+  2. Prohibits redistribution, sublicensing, or commercial use without
+     explicit written consent.
+  3. Restricts use to authorised individuals only.
+  4. Includes a confidentiality / non-disclosure obligation.
+  5. Includes a disclaimer of warranties and a limitation of liability.
+
+Consult a qualified solicitor or attorney before finalising your licence.
