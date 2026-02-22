@@ -1,5 +1,6 @@
 Django>=5.1.12
 thefuzz>=0.22.1
-python-Levenshtein>=0.25.0   # optional but speeds up thefuzz significantly
-plotly>=5.0.0
-pandas>=2.0.0
+python-Levenshtein>=0.25.0
+plotly>=5.24.1
+pandas>=2.2.0
+pypdf>=4.0.0

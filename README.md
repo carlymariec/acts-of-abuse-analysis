@@ -12,11 +12,13 @@ DARVO (Deny, Attack, Reverse Victim and Offender), and institutional/systems abu
 
 | Module | Description |
 |--------|-------------|
-| `evidence/models.py` | `ForensicEvidence` (uploaded file + SHA-256) and `AnalyzedEvent` (parsed message with severity) |
-| `evidence/parsers/` | Modular parsers for WhatsApp, Facebook, Discord, PDF, and generic text exports |
-| `evidence/ingestion.py` | Auto-detects platform and delegates to the correct parser |
-| `evidence/analysis_engine.py` | `CoerciveControlEngine` – fuzzy keyword analysis using *thefuzz* |
-| `evidence/views.py` | `generate_timeline()` – Plotly Express interactive HTML timeline of verified events |
+| `evidence/models.py` | `ForensicEvidence` (uploaded file + SHA-256 chain-of-custody, auto-hashed on save, file-type + size + security validators) and `AnalyzedEvent` (parsed message with severity 1-4, human-in-the-loop `is_verified` flag) |
+| `evidence/file_security.py` | Magic-byte detection (PE/ELF/Mach-O/shebang) + injection-pattern scan (XSS/eval/SQL/prototype-pollution) applied to every upload |
+| `evidence/parsers/` | Modular parsers for WhatsApp, Facebook Messenger, Discord, PDF, and generic text exports — each exposes `extract_data(file_path)` |
+| `evidence/ingestion.py` | SHA-256 hash computation; auto-detects platform from JSON structure or extension; validates parser name against `_ALLOWED_PARSERS` whitelist |
+| `evidence/analysis_engine.py` | `CoerciveControlEngine` – fuzzy keyword analysis across three Duluth model wheels (Post-Separation Power & Control, Economic Abuse, Child Abuse), DARVO detection, and systemic/institutional abuse scoring; returns `all_flags` cross-reference list |
+| `evidence/views.py` | `generate_timeline()` – Plotly Express interactive HTML timeline of verified events only (null timestamps filtered out; empty-state fallback) |
+| `evidence/tests.py` | 49 tests covering all modules: hash, parsers, ingestion, analysis engine, file scanner, timeline |
 
 ---
 
@@ -83,30 +85,27 @@ acts-of-abuse-anlysis/
 ├── manage.py
 ├── requirements.txt
 ├── README.md
-├── LICENSE                  # ← replace with your licence
-├── config/                  # Django project package
-│   ├── __init__.py
+├── LICENSE                  # Sole-proprietor licence 2024-2026
+├── config/                  # Alternative Django project package (scaffold)
 │   ├── settings.py
+│   └── ...
+├── forensic_tool/           # Primary Django project package
+│   ├── settings.py          # Hardened: env-var SECRET_KEY, production security headers
 │   ├── urls.py
-│   ├── asgi.py
-│   └── wsgi.py
+│   └── ...
 └── evidence/                # Django app
-    ├── __init__.py
-    ├── apps.py
-    ├── models.py
-    ├── admin.py
-    ├── ingestion.py
-    ├── analysis_engine.py
-    ├── views.py
+    ├── models.py            # ForensicEvidence + AnalyzedEvent (hardened)
+    ├── admin.py             # Both models registered
+    ├── ingestion.py         # SHA-256 hash + platform detection + parser whitelist
+    ├── analysis_engine.py   # CoerciveControlEngine (3 Duluth wheels + DARVO)
+    ├── file_security.py     # Magic-byte + injection-pattern upload scanner
+    ├── views.py             # generate_timeline() (Plotly, verified events only)
+    ├── tests.py             # 49 tests
     ├── migrations/
-    │   └── __init__.py
-    └── parsers/
-        ├── __init__.py
-        ├── whatsapp.py
-        ├── facebook.py
-        ├── discord.py
-        ├── pdf.py
-        └── generic.py
+    │   ├── 0001_initial.py
+    │   └── 0002_alter_analyzedevent_is_verified_and_more.py
+    └── parsers/             # Stub package (evidence/parsers/)
+        └── ...
 ```
 
 ---

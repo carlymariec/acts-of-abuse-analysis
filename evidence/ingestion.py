@@ -1,70 +1,86 @@
-"""
-Evidence ingestion module.
-
-Detects the source platform of an uploaded file and delegates parsing to the
-appropriate parser module using dynamic import.
-"""
 import importlib
-import os
+import hashlib
+import json
 
-from evidence.parsers import PLATFORM_PARSERS
+# Read files in 64 KB chunks to keep memory usage constant for large evidence files
+_HASH_CHUNK_SIZE = 65536
 
-# Map file extensions to platform keys
-_EXTENSION_MAP: dict[str, str] = {
-    ".txt": "whatsapp",  # WhatsApp exports are plain .txt
-    ".json": "facebook",  # Facebook / Discord exports are JSON
-    ".pdf": "pdf",
-}
-
-# Lightweight content sniffs: (platform_key, bytes_to_search_for)
-_CONTENT_SNIFFS: list[tuple[str, bytes]] = [
-    ("whatsapp", b"WhatsApp"),
-    ("discord", b'"guild"'),
-    ("facebook", b'"messages"'),
-]
+# Whitelist of allowed parser module names to prevent module-injection attacks
+_ALLOWED_PARSERS = frozenset({'whatsapp', 'facebook', 'discord', 'pdf', 'generic'})
 
 
-def _detect_platform(file_path: str) -> str:
-    """Return the platform key for *file_path*.
+def compute_file_hash(file_path):
+    """
+    Computes the SHA-256 hash of a file for forensic chain of custody.
+    """
+    sha256 = hashlib.sha256()
+    with open(file_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(_HASH_CHUNK_SIZE), b''):
+            sha256.update(chunk)
+    return sha256.hexdigest()
 
-    Strategy:
-    1. Read the first 4 KB and look for known byte signatures.
-    2. Fall back to extension mapping.
-    3. Default to 'generic'.
+
+def import_parser(platform_name):
+    """
+    Dynamically imports the correct parser module using importlib.
+    Only modules from the pre-approved whitelist are allowed.
+    """
+    name = platform_name.lower()
+    if name not in _ALLOWED_PARSERS:
+        raise ValueError(
+            f"'{platform_name}' is not a recognised parser. "
+            f"Allowed parsers: {sorted(_ALLOWED_PARSERS)}"
+        )
+    try:
+        parser_module = importlib.import_module(f'parsers.{name}')
+        return parser_module
+    except ImportError as e:
+        raise ValueError(f"Parser for {platform_name} not found.") from e
+
+
+def _detect_json_platform(file_path):
+    """
+    Parse the JSON structure to reliably identify the export platform.
+    Returns 'facebook', 'discord', or None.
     """
     try:
-        with open(file_path, "rb") as fh:
-            header = fh.read(4096)
-        for platform_key, signature in _CONTENT_SNIFFS:
-            if signature in header:
-                return platform_key
-    except OSError:
-        pass
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
 
-    ext = os.path.splitext(file_path)[1].lower()
-    return _EXTENSION_MAP.get(ext, "generic")
+    if not isinstance(data, dict):
+        return None
+
+    # Facebook Messenger exports have top-level 'participants' and 'messages' keys
+    if 'participants' in data and 'messages' in data:
+        return 'facebook'
+
+    # Discord exports (DiscordChatExporter) have a top-level 'guild' or 'channel' key
+    if 'guild' in data or 'channel' in data:
+        return 'discord'
+
+    return None
 
 
-def _load_parser(platform_key: str):
-    """Dynamically import and return the parser module for *platform_key*."""
-    module_path = PLATFORM_PARSERS.get(platform_key, PLATFORM_PARSERS["generic"])
-    return importlib.import_module(module_path)
-
-
-def process_upload(file_path: str) -> list:
-    """Detect the platform, load the appropriate parser, and return extracted events.
-
-    Parameters
-    ----------
-    file_path:
-        Absolute or relative path to the uploaded evidence file.
-
-    Returns
-    -------
-    list[dict]
-        A list of raw event dicts produced by the parser.  Each dict contains
-        at minimum ``timestamp``, ``sender``, and ``content`` keys.
+def process_upload(file_path):
     """
-    platform = _detect_platform(file_path)
-    parser = _load_parser(platform)
-    return parser.extract_data(file_path)
+    Auto-detection based on file content and structure.
+    Returns extracted data from the appropriate parser.
+    """
+    platform = None
+    if file_path.endswith('.json'):
+        platform = _detect_json_platform(file_path)
+    elif file_path.endswith('.txt'):
+        platform = 'whatsapp'  # WhatsApp txt exports
+    elif file_path.endswith('.pdf'):
+        platform = 'pdf'       # PDF format
+
+    if platform:
+        # Dynamically load and execute the parser
+        parser = import_parser(platform)
+        return parser.extract_data(file_path)
+    else:
+        # Fallback to Generic text with custom regex patterns
+        generic_parser = import_parser('generic')
+        return generic_parser.extract_data(file_path)
