@@ -1,12 +1,15 @@
 import hashlib
+import io
 import json
 import os
 import tempfile
 from datetime import datetime
 
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from evidence.analysis_engine import CoerciveControlEngine
+from evidence.file_security import validate_file_content
 from evidence.ingestion import compute_file_hash, import_parser, process_upload
 from evidence.views import generate_timeline
 
@@ -365,3 +368,162 @@ class GenerateTimelineTests(TestCase):
         ]
         html = generate_timeline(events)
         self.assertIn('plotly', html.lower())
+
+
+# ---------------------------------------------------------------------------
+# Cross-reference flag list
+# ---------------------------------------------------------------------------
+
+class CrossReferenceFlagTests(TestCase):
+    def setUp(self):
+        self.engine = CoerciveControlEngine()
+
+    def _wheel_labels(self, result):
+        return [f['wheel'] for f in result['all_flags']]
+
+    def _categories(self, result):
+        return [f['category'] for f in result['all_flags']]
+
+    def test_baseline_has_empty_all_flags(self):
+        r = self.engine.analyze_message("Hello, how are you?")
+        self.assertEqual(r['all_flags'], [])
+
+    def test_duluth_match_appears_in_all_flags(self):
+        r = self.engine.analyze_message("You are worthless and I am isolating you.")
+        wheels = self._wheel_labels(r)
+        self.assertIn('Post-Separation Power & Control', wheels)
+
+    def test_economic_match_appears_in_all_flags(self):
+        r = self.engine.analyze_message("I drained the account.")
+        wheels = self._wheel_labels(r)
+        self.assertIn('Post-Separation Economic Abuse', wheels)
+
+    def test_child_abuse_match_appears_in_all_flags(self):
+        r = self.engine.analyze_message("I am not returning the kids.")
+        wheels = self._wheel_labels(r)
+        self.assertIn('Child Abuse', wheels)
+
+    def test_darvo_match_appears_in_all_flags(self):
+        r = self.engine.analyze_message("It never happened, you are crazy.")
+        wheels = self._wheel_labels(r)
+        self.assertIn('DARVO', wheels)
+        # Both Deny and Attack should be listed
+        darvo_entries = [f for f in r['all_flags'] if f['wheel'] == 'DARVO']
+        categories = [e['category'] for e in darvo_entries]
+        self.assertIn('Deny', categories)
+        self.assertIn('Attack', categories)
+
+    def test_institutional_appears_in_all_flags(self):
+        r = self.engine.analyze_message("The judge will decide custody.")
+        wheels = self._wheel_labels(r)
+        self.assertIn('Systemic/Institutional Abuse', wheels)
+
+    def test_multi_wheel_message_all_flags_contains_all_wheels(self):
+        """A message touching all wheels populates all_flags with entries from every wheel."""
+        msg = (
+            "You are crazy. I drained the account. "
+            "I am not returning the kids. The judge will see you are unfit."
+        )
+        r = self.engine.analyze_message(msg)
+        wheels = set(self._wheel_labels(r))
+        self.assertIn('DARVO', wheels)
+        self.assertIn('Post-Separation Economic Abuse', wheels)
+        self.assertIn('Child Abuse', wheels)
+        self.assertIn('Systemic/Institutional Abuse', wheels)
+
+    def test_all_flags_entries_have_wheel_and_category_keys(self):
+        r = self.engine.analyze_message("You are worthless. I drained the account.")
+        for entry in r['all_flags']:
+            self.assertIn('wheel', entry)
+            self.assertIn('category', entry)
+
+
+# ---------------------------------------------------------------------------
+# File security scanner
+# ---------------------------------------------------------------------------
+
+class _FakeFile:
+    """Minimal in-memory file-like object for testing the security scanner."""
+    def __init__(self, content: bytes, name: str = 'evidence.txt'):
+        self._buf = io.BytesIO(content)
+        self.name = name
+
+    def seek(self, pos):
+        self._buf.seek(pos)
+
+    def read(self, n=-1):
+        return self._buf.read(n) if n != -1 else self._buf.read()
+
+
+class FileScannerTests(TestCase):
+    def test_clean_text_file_passes(self):
+        f = _FakeFile(b"01/15/2024 10:30 - Alice: Hello there\n", name='chat.txt')
+        # Should not raise
+        validate_file_content(f)
+
+    def test_clean_json_file_passes(self):
+        payload = json.dumps({
+            "participants": [{"name": "Alice"}],
+            "messages": [{"sender_name": "Alice", "content": "Hi"}],
+        }).encode()
+        f = _FakeFile(payload, name='export.json')
+        validate_file_content(f)
+
+    def test_windows_executable_blocked(self):
+        f = _FakeFile(b'\x4d\x5a' + b'\x00' * 100, name='malware.txt')
+        with self.assertRaises(ValidationError) as ctx:
+            validate_file_content(f)
+        self.assertIn('Windows executable', str(ctx.exception))
+
+    def test_elf_executable_blocked(self):
+        f = _FakeFile(b'\x7fELF' + b'\x00' * 100, name='elf.txt')
+        with self.assertRaises(ValidationError):
+            validate_file_content(f)
+
+    def test_shell_script_blocked(self):
+        f = _FakeFile(b'#!/bin/bash\nrm -rf /', name='script.txt')
+        with self.assertRaises(ValidationError) as ctx:
+            validate_file_content(f)
+        self.assertIn('shell', str(ctx.exception))
+
+    def test_xss_script_tag_in_txt_blocked(self):
+        f = _FakeFile(b'hello <script>alert(1)</script> world', name='chat.txt')
+        with self.assertRaises(ValidationError) as ctx:
+            validate_file_content(f)
+        self.assertIn('script', str(ctx.exception))
+
+    def test_javascript_url_in_json_blocked(self):
+        payload = b'{"msg": "click javascript:alert(1)"}'
+        f = _FakeFile(payload, name='export.json')
+        with self.assertRaises(ValidationError) as ctx:
+            validate_file_content(f)
+        self.assertIn('javascript', str(ctx.exception))
+
+    def test_sql_injection_in_txt_blocked(self):
+        f = _FakeFile(b"name'; DROP TABLE evidence;--", name='chat.txt')
+        with self.assertRaises(ValidationError) as ctx:
+            validate_file_content(f)
+        self.assertIn('SQL', str(ctx.exception))
+
+    def test_eval_call_in_json_blocked(self):
+        payload = b'{"data": "eval(malicious())"}'
+        f = _FakeFile(payload, name='data.json')
+        with self.assertRaises(ValidationError) as ctx:
+            validate_file_content(f)
+        self.assertIn('eval()', str(ctx.exception))
+
+    def test_prototype_pollution_blocked(self):
+        payload = b'{"__proto__": {"admin": true}}'
+        f = _FakeFile(payload, name='data.json')
+        with self.assertRaises(ValidationError) as ctx:
+            validate_file_content(f)
+        self.assertIn('prototype pollution', str(ctx.exception))
+
+    def test_injection_patterns_not_scanned_for_pdf(self):
+        """PDF files are not text-scanned for injection patterns."""
+        # A PDF with <script> text in it should pass the injection scan
+        # (the magic-byte check still applies for executables)
+        payload = b'%PDF-1.4 <script>alert(1)</script>'
+        f = _FakeFile(payload, name='document.pdf')
+        # Should not raise (PDFs are not text-scanned)
+        validate_file_content(f)

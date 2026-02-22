@@ -225,6 +225,10 @@ class CoerciveControlEngine:
             'darvo_flags': [],
             'institutional_abuse': False,
             'severity': 1,  # Severity Scoring (1=Low, 4=Critical)
+            # Cross-reference list — every matched flag from every wheel in one place,
+            # each entry labelled with its wheel/type so multiple categories
+            # detected in the same message can be reviewed together.
+            'all_flags': [],
         }
 
         text_lower = text.lower()
@@ -234,27 +238,43 @@ class CoerciveControlEngine:
         if matched_duluth:
             results['categories'] = matched_duluth
             results['severity'] = max(results['severity'], 2)
+            results['all_flags'].extend(
+                {'wheel': 'Post-Separation Power & Control', 'category': c}
+                for c in matched_duluth
+            )
 
         # Post-Separation Economic Abuse Wheel
         matched_economic = self._match_wheel(self.post_separation_economic_abuse, text_lower)
         if matched_economic:
             results['economic_abuse_flags'] = matched_economic
             results['severity'] = max(results['severity'], 3)
+            results['all_flags'].extend(
+                {'wheel': 'Post-Separation Economic Abuse', 'category': c}
+                for c in matched_economic
+            )
 
         # Child Abuse Wheel
         matched_child = self._match_wheel(self.child_abuse_wheel, text_lower)
         if matched_child:
             results['child_abuse_flags'] = matched_child
             results['severity'] = max(results['severity'], 3)
+            results['all_flags'].extend(
+                {'wheel': 'Child Abuse', 'category': c}
+                for c in matched_child
+            )
 
         # DARVO Detection
         for phase, keywords in self.darvo.items():
             if any(word in text_lower for word in keywords):
                 results['darvo_flags'].append(phase)
+                results['all_flags'].append({'wheel': 'DARVO', 'category': phase})
 
         # Systemic/Institutional Detection
         if any(word in text_lower for word in self.systemic_abuse):
             results['institutional_abuse'] = True
             results['severity'] = max(results['severity'], 4)  # Critical risk level
+            results['all_flags'].append(
+                {'wheel': 'Systemic/Institutional Abuse', 'category': 'Institutional Abuse Detected'}
+            )
 
         return results

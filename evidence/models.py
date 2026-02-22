@@ -5,6 +5,8 @@ from django.core.exceptions import ValidationError
 from django.core.validators import FileExtensionValidator, MaxValueValidator, MinValueValidator
 from django.db import models
 
+from .file_security import validate_file_content
+
 # Maximum upload size for evidence files (50 MB)
 _MAX_EVIDENCE_FILE_SIZE_MB = 50
 
@@ -25,6 +27,7 @@ class ForensicEvidence(models.Model):
         validators=[
             FileExtensionValidator(allowed_extensions=['txt', 'json', 'pdf']),
             validate_file_size,
+            validate_file_content,
         ],
     )
     # SHA-256 hash for forensic chain of custody; unique prevents duplicate evidence entries
