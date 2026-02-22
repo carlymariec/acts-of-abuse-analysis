@@ -87,6 +87,40 @@ class GenericParserTests(TestCase):
         finally:
             os.unlink(tmp)
 
+    def test_extracts_sender_from_plain_line(self):
+        """Sender in 'Name: message' format should be detected on lines without a timestamp."""
+        tmp = self._write_tmp("Alice: Hello there\nBob: Hi back\n")
+        try:
+            msgs = import_parser('generic').extract_data(tmp)
+            self.assertEqual(len(msgs), 2)
+            self.assertEqual(msgs[0]['sender'], 'Alice')
+            self.assertEqual(msgs[0]['content'], 'Hello there')
+            self.assertEqual(msgs[1]['sender'], 'Bob')
+        finally:
+            os.unlink(tmp)
+
+    def test_extracts_sender_after_timestamp(self):
+        """Sender in 'TIMESTAMP - Name: message' format should be detected."""
+        tmp = self._write_tmp("01/15/2024 10:30:00 - Alice: Hello there\n")
+        try:
+            msgs = import_parser('generic').extract_data(tmp)
+            self.assertEqual(len(msgs), 1)
+            self.assertEqual(msgs[0]['sender'], 'Alice')
+            self.assertEqual(msgs[0]['content'], 'Hello there')
+            self.assertIsNotNone(msgs[0]['timestamp'])
+        finally:
+            os.unlink(tmp)
+
+    def test_no_sender_pattern_falls_back_to_unknown(self):
+        """Lines with no 'Sender: message' pattern should fall back to 'Unknown'."""
+        tmp = self._write_tmp("Just a plain statement with no sender.\n")
+        try:
+            msgs = import_parser('generic').extract_data(tmp)
+            self.assertEqual(msgs[0]['sender'], 'Unknown')
+            self.assertEqual(msgs[0]['content'], 'Just a plain statement with no sender.')
+        finally:
+            os.unlink(tmp)
+
 
 # ---------------------------------------------------------------------------
 # WhatsApp parser
