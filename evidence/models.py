@@ -64,6 +64,12 @@ class AnalyzedEvent(models.Model):
         validators=[MinValueValidator(1), MaxValueValidator(4)],
     )
 
+    # Universal identifiers for exact extraction and auditability
+    sender_id = models.CharField(max_length=255, blank=True)
+    conversation_id = models.CharField(max_length=255, blank=True)
+    message_id = models.CharField(max_length=255, blank=True)
+    source_platform = models.CharField(max_length=64, blank=True)
+
     # Human-in-the-loop verification
     is_verified = models.BooleanField(default=False, db_index=True)
     user_context_notes = models.TextField(blank=True)

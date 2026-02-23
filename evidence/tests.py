@@ -3,14 +3,22 @@ import io
 import json
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from evidence.analysis_engine import CoerciveControlEngine
+from evidence.analysis_pipeline import run_analysis_pipeline
 from evidence.file_security import validate_file_content
 from evidence.ingestion import compute_file_hash, import_parser, process_upload
+from evidence.normalization import (
+    build_context_window,
+    local_day_bounds,
+    merge_windows,
+    normalize_messages,
+)
 from evidence.views import generate_timeline
 
 
@@ -527,3 +535,230 @@ class FileScannerTests(TestCase):
         f = _FakeFile(payload, name='document.pdf')
         # Should not raise (PDFs are not text-scanned)
         validate_file_content(f)
+
+
+# ---------------------------------------------------------------------------
+# Normalization helpers — local-day slicing and window merging
+# ---------------------------------------------------------------------------
+
+class LocalDayBoundsTests(TestCase):
+    """Tests for DST-safe local-day UTC bound computation."""
+
+    def test_utc_day_bounds(self):
+        """UTC day for 2024-01-15 12:00 UTC should span that whole UTC day."""
+        dt = datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc)
+        start, end = local_day_bounds(dt, 'UTC')
+        self.assertEqual(start, datetime(2024, 1, 15, 0, 0, tzinfo=timezone.utc))
+        self.assertEqual(end, datetime(2024, 1, 16, 0, 0, tzinfo=timezone.utc))
+
+    def test_eastern_standard_time_offset(self):
+        """America/New_York at UTC-5 (EST) in January: day bounds 5 h ahead of UTC."""
+        # 2024-01-15 12:00 UTC = 07:00 EST — local day is 2024-01-15 EST.
+        dt = datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc)
+        start, end = local_day_bounds(dt, 'America/New_York')
+        # Local midnight 2024-01-15 00:00 EST = 2024-01-15 05:00 UTC
+        self.assertEqual(start, datetime(2024, 1, 15, 5, 0, tzinfo=timezone.utc))
+        # Local midnight 2024-01-16 00:00 EST = 2024-01-16 05:00 UTC
+        self.assertEqual(end, datetime(2024, 1, 16, 5, 0, tzinfo=timezone.utc))
+
+    def test_dst_spring_forward_day_is_23_hours(self):
+        """DST spring-forward day (America/New_York 2024-03-10) should be 23 h long."""
+        # 2024-03-10: clocks spring forward 2 am -> 3 am (23-hour day).
+        dt = datetime(2024, 3, 10, 12, 0, tzinfo=timezone.utc)
+        start, end = local_day_bounds(dt, 'America/New_York')
+        delta = end - start
+        self.assertEqual(delta.total_seconds(), 23 * 3600)
+
+    def test_dst_fall_back_day_is_25_hours(self):
+        """DST fall-back day (America/New_York 2024-11-03) should be 25 h long."""
+        # 2024-11-03: clocks fall back 2 am -> 1 am (25-hour day).
+        dt = datetime(2024, 11, 3, 12, 0, tzinfo=timezone.utc)
+        start, end = local_day_bounds(dt, 'America/New_York')
+        delta = end - start
+        self.assertEqual(delta.total_seconds(), 25 * 3600)
+
+    def test_naive_datetime_treated_as_utc(self):
+        """Naive datetime should be treated as UTC without raising."""
+        dt = datetime(2024, 6, 1, 10, 0)  # naive
+        start, end = local_day_bounds(dt, 'UTC')
+        self.assertEqual(start, datetime(2024, 6, 1, 0, 0, tzinfo=timezone.utc))
+        self.assertEqual(end, datetime(2024, 6, 2, 0, 0, tzinfo=timezone.utc))
+
+
+class MergeWindowsTests(TestCase):
+    """Tests for context-window merging logic."""
+
+    def test_empty_list_returns_empty(self):
+        self.assertEqual(merge_windows([]), [])
+
+    def test_single_window_unchanged(self):
+        self.assertEqual(merge_windows([(2, 7)]), [(2, 7)])
+
+    def test_non_overlapping_windows_kept_separate(self):
+        result = merge_windows([(0, 3), (10, 15)])
+        self.assertEqual(result, [(0, 3), (10, 15)])
+
+    def test_overlapping_windows_merged(self):
+        result = merge_windows([(0, 5), (3, 8)])
+        self.assertEqual(result, [(0, 8)])
+
+    def test_adjacent_windows_merged(self):
+        # Windows (0,5) and (6,10) are adjacent — should merge to (0,10).
+        result = merge_windows([(0, 5), (6, 10)])
+        self.assertEqual(result, [(0, 10)])
+
+    def test_unsorted_input_is_sorted_first(self):
+        result = merge_windows([(10, 15), (0, 5)])
+        self.assertEqual(result, [(0, 5), (10, 15)])
+
+    def test_multiple_overlapping_collapse_to_one(self):
+        result = merge_windows([(0, 3), (2, 6), (5, 10)])
+        self.assertEqual(result, [(0, 10)])
+
+    def test_build_context_window_clamped(self):
+        messages = [{}] * 20
+        start, end = build_context_window(messages, 0, window_size=5)
+        self.assertEqual(start, 0)
+        self.assertEqual(end, 5)
+
+        start, end = build_context_window(messages, 19, window_size=5)
+        self.assertEqual(start, 14)
+        self.assertEqual(end, 19)
+
+
+class NormalizeMessagesTests(TestCase):
+    """Tests for message normalization."""
+
+    def test_naive_timestamp_becomes_utc(self):
+        raw = [{'timestamp': datetime(2024, 1, 1, 12, 0), 'sender': 'A', 'content': 'hi'}]
+        result = normalize_messages(raw)
+        self.assertIsNotNone(result[0]['timestamp'].tzinfo)
+
+    def test_missing_sender_defaults_to_unknown(self):
+        raw = [{'timestamp': None, 'content': 'hello'}]
+        result = normalize_messages(raw)
+        self.assertEqual(result[0]['sender'], 'Unknown')
+
+    def test_missing_content_defaults_to_empty_string(self):
+        raw = [{'timestamp': None, 'sender': 'Bob'}]
+        result = normalize_messages(raw)
+        self.assertEqual(result[0]['content'], '')
+
+
+# ---------------------------------------------------------------------------
+# Analysis pipeline — persistence of new fields
+# ---------------------------------------------------------------------------
+
+class AnalysisPipelinePersistenceTests(TestCase):
+    """Tests that run_analysis_pipeline persists AnalyzedEvent with new fields."""
+
+    def _make_evidence(self):
+        """Create a minimal ForensicEvidence-like stub via the real model."""
+        from django.contrib.auth import get_user_model
+        from evidence.models import ForensicEvidence
+
+        User = get_user_model()
+        user = User.objects.create_user(username='testuser', password='pw')
+        ev = ForensicEvidence.__new__(ForensicEvidence)
+        ev.user = user
+        ev.file_hash = 'a' * 64
+        # We store a fake file attr to avoid full media stack.
+        ev.file = None
+        ev.pk = None
+        # Bypass file-hash logic by setting hash directly then saving bare.
+        ev.save = lambda *a, **kw: None  # stub out save for evidence
+        ev.pk = 1  # fake pk
+        return ev
+
+    def _make_real_evidence(self):
+        """Create a real ForensicEvidence row using raw DB insert."""
+        from django.contrib.auth import get_user_model
+        from evidence.models import ForensicEvidence, AnalyzedEvent
+        User = get_user_model()
+        user, _ = User.objects.get_or_create(username='pipetest')
+        # Use raw SQL to create a minimal ForensicEvidence row.
+        from django.db import connection
+        with connection.cursor() as cur:
+            cur.execute(
+                "INSERT INTO evidence_forensicevidence"
+                " (user_id, file, file_hash, upload_date)"
+                " VALUES (%s, %s, %s, datetime('now'))",
+                [user.pk, 'evidence_files/test.txt', 'b' * 64],
+            )
+            ev_id = cur.lastrowid
+        return ForensicEvidence.objects.get(pk=ev_id)
+
+    def test_new_identifier_fields_persisted(self):
+        """Pipeline should store sender_id, conversation_id, message_id, source_platform."""
+        from evidence.models import AnalyzedEvent
+
+        ev = self._make_real_evidence()
+
+        raw = [
+            {
+                'timestamp': datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc),
+                'sender': 'Abuser',
+                'content': 'You are worthless and I will isolate you.',
+                'sender_id': 'user-42',
+                'conversation_id': 'conv-99',
+                'message_id': 'msg-001',
+                'source_platform': 'whatsapp',
+            }
+        ]
+        events = run_analysis_pipeline(raw, ev)
+        self.assertEqual(len(events), 1)
+        saved = AnalyzedEvent.objects.get(pk=events[0].pk)
+        self.assertEqual(saved.sender_id, 'user-42')
+        self.assertEqual(saved.conversation_id, 'conv-99')
+        self.assertEqual(saved.message_id, 'msg-001')
+        self.assertEqual(saved.source_platform, 'whatsapp')
+        self.assertFalse(saved.is_verified)
+
+    def test_unflagged_messages_not_persisted(self):
+        """Benign messages (severity==1) should not create AnalyzedEvent rows."""
+        from evidence.models import AnalyzedEvent
+
+        ev = self._make_real_evidence()
+        raw = [
+            {
+                'timestamp': datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc),
+                'sender': 'Alice',
+                'content': 'Hi, how are you doing today?',
+            }
+        ]
+        events = run_analysis_pipeline(raw, ev)
+        self.assertEqual(len(events), 0)
+
+    def test_context_notes_populated_for_flagged(self):
+        """Auto-generated context notes should be non-empty for flagged messages."""
+        ev = self._make_real_evidence()
+        raw = [
+            {
+                'timestamp': datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc),
+                'sender': 'X',
+                'content': 'I will take the kids and you will never see them.',
+            }
+        ]
+        events = run_analysis_pipeline(raw, ev)
+        self.assertTrue(len(events) > 0)
+        self.assertIn('[Auto]', events[0].user_context_notes)
+
+    def test_new_fields_blank_by_default(self):
+        """New identifier fields default to blank when not provided by parser."""
+        from evidence.models import AnalyzedEvent
+
+        ev = self._make_real_evidence()
+        raw = [
+            {
+                'timestamp': datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc),
+                'sender': 'X',
+                'content': 'You are worthless and I will isolate you.',
+            }
+        ]
+        events = run_analysis_pipeline(raw, ev)
+        self.assertEqual(len(events), 1)
+        saved = AnalyzedEvent.objects.get(pk=events[0].pk)
+        self.assertEqual(saved.sender_id, '')
+        self.assertEqual(saved.conversation_id, '')
+        self.assertEqual(saved.message_id, '')
+        self.assertEqual(saved.source_platform, '')
