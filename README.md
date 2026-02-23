@@ -3,8 +3,9 @@
 A private Django-based forensic analysis tool for documenting coercive control,
 DARVO (Deny, Attack, Reverse Victim and Offender), and institutional/systems abuse.
 
-> ⚠️ **Private use only.** See [`LICENSE`](LICENSE) for terms.  
-> Replace the `LICENSE` placeholder with your own proprietary licence before distributing.
+> ⚠️ **Private use only.** See [`LICENSE`](LICENSE) for terms.
+
+📚 **[Full documentation is in the `docs/` folder →](docs/README.md)**
 
 ---
 
