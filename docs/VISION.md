@@ -25,10 +25,10 @@ This project is different. It is built:
 
 | Goal | How the tool achieves it |
 |------|--------------------------|
-| Organise evidence | Import exports from WhatsApp, Facebook Messenger, Discord, PDF, and generic text formats |
+| Organize evidence | Import exports from WhatsApp, Facebook Messenger, Discord, PDF, and generic text formats |
 | Identify patterns | Fuzzy-match keywords against the Duluth Power & Control wheels, DARVO tactics, and systemic/institutional abuse indicators |
 | Quantify severity | Score each event 1 (low) → 4 (critical) so the worst incidents rise to the top |
-| Visualise patterns | Generate an interactive Plotly timeline of verified events, showing escalation over time |
+| Visualize patterns | Generate an interactive Plotly timeline of verified events, showing escalation over time |
 | Protect chain of custody | SHA-256 hash every upload so tampering can be detected |
 | Stay safe | Scan every upload for malicious files and injection payloads before they touch the database |
 
