@@ -322,7 +322,7 @@ class CoerciveControlEngineTests(TestCase):
     def test_child_abuse_detected(self):
         r = self.engine.analyze_message("I am not returning the kids this weekend.")
         self.assertGreaterEqual(r['severity'], 3)
-        self.assertTrue(len(r['child_abuse_flags']) > 0)
+        self.assertGreater(len(r['child_abuse_flags']), 0)
 
     def test_darvo_detected(self):
         r = self.engine.analyze_message("It never happened, you are crazy.")
