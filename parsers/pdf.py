@@ -8,7 +8,7 @@ Requires the 'pypdf' package (pure Python, no native dependencies).
 def extract_data(file_path):
     """
     Extracts text from a PDF and returns a list of message dicts.
-    Each dict contains: timestamp (None), sender ('PDF Document'), content (str).
+    Each dict contains: timestamp (None), sender ('PDF Page {page_num}'), content (str).
     """
     try:
         from pypdf import PdfReader
