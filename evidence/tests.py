@@ -739,7 +739,7 @@ class AnalysisPipelinePersistenceTests(TestCase):
             }
         ]
         events = run_analysis_pipeline(raw, ev)
-        self.assertTrue(len(events) > 0)
+        self.assertGreater(len(events), 0)
         self.assertIn('[Auto]', events[0].user_context_notes)
 
     def test_new_fields_blank_by_default(self):
