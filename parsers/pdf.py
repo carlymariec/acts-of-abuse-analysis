@@ -3,7 +3,6 @@ PDF parser for evidence documents.
 Extracts plain text from each page of a PDF file.
 Requires the 'pypdf' package (pure Python, no native dependencies).
 """
-from datetime import datetime
 
 
 def extract_data(file_path):
