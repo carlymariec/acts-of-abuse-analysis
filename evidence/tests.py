@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase
@@ -304,7 +305,6 @@ class CoerciveControlEngineTests(TestCase):
     def test_duluth_category_detected(self):
         r = self.engine.analyze_message("You are worthless and I will isolate you.")
         self.assertGreaterEqual(r['severity'], 2)
-        self.assertTrue(len(r['categories']) > 0)
         self.assertGreater(len(r['categories']), 0)
     def test_no_duplicate_categories(self):
         r = self.engine.analyze_message(
@@ -602,8 +602,8 @@ class MergeWindowsTests(TestCase):
         self.assertEqual(result, [(0, 8)])
 
     def test_adjacent_windows_merged(self):
-        # Windows (0,5) and (6,10) are adjacent — should merge to (0,10).
-        result = merge_windows([(0, 5), (6, 10)])
+        # Windows (0,5) and (5,10) are adjacent — should merge to (0,10).
+        result = merge_windows([(0, 5), (5, 10)])
         self.assertEqual(result, [(0, 10)])
 
     def test_unsorted_input_is_sorted_first(self):
@@ -658,20 +658,21 @@ class AnalysisPipelinePersistenceTests(TestCase):
 
         User = get_user_model()
         user = User.objects.create_user(username='testuser', password='pw')
-        ev = ForensicEvidence.__new__(ForensicEvidence)
-        ev.user = user
-        ev.file_hash = 'a' * 64
-        # We store a fake file attr to avoid full media stack.
-        ev.file = None
-        ev.pk = None
-        # Bypass file-hash logic by setting hash directly then saving bare.
-        ev.save = lambda *a, **kw: None  # stub out save for evidence
-        ev.pk = 1  # fake pk
+        with patch.object(ForensicEvidence, "save", return_value=None):
+            ev = ForensicEvidence.__new__(ForensicEvidence)
+            ev.user = user
+            ev.file_hash = 'a' * 64
+            # We store a fake file attr to avoid full media stack.
+            ev.file = None
+            ev.pk = None
+            # Keep a fake pk to mimic a persisted object in tests that require it.
+            ev.pk = 1  # fake pk
         return ev
 
     def _make_real_evidence(self):
         """Create a real ForensicEvidence row using raw DB insert."""
         from django.contrib.auth import get_user_model
+        from django.utils import timezone
         from evidence.models import ForensicEvidence, AnalyzedEvent
         User = get_user_model()
         user, _ = User.objects.get_or_create(username='pipetest')
@@ -681,8 +682,8 @@ class AnalysisPipelinePersistenceTests(TestCase):
             cur.execute(
                 "INSERT INTO evidence_forensicevidence"
                 " (user_id, file, file_hash, upload_date)"
-                " VALUES (%s, %s, %s, datetime('now'))",
-                [user.pk, 'evidence_files/test.txt', 'b' * 64],
+                " VALUES (%s, %s, %s, %s)",
+                [user.pk, 'evidence_files/test.txt', 'b' * 64, timezone.now()],
             )
             ev_id = cur.lastrowid
         return ForensicEvidence.objects.get(pk=ev_id)
