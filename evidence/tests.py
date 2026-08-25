@@ -305,6 +305,7 @@ class CoerciveControlEngineTests(TestCase):
         r = self.engine.analyze_message("You are worthless and I will isolate you.")
         self.assertGreaterEqual(r['severity'], 2)
         self.assertGreater(len(r['categories']), 0)
+
     def test_no_duplicate_categories(self):
         r = self.engine.analyze_message(
             "You are worthless and pathetic, you are nothing."
