@@ -672,8 +672,8 @@ class AnalysisPipelinePersistenceTests(TestCase):
     def _make_real_evidence(self):
         """Create a real ForensicEvidence row using raw DB insert."""
         from django.contrib.auth import get_user_model
-        from django.utils import timezone
-        from evidence.models import ForensicEvidence, AnalyzedEvent
+        from django.utils import timezone as django_timezone
+        from evidence.models import ForensicEvidence
         User = get_user_model()
         user, _ = User.objects.get_or_create(username='pipetest')
         # Use raw SQL to create a minimal ForensicEvidence row.
@@ -683,7 +683,7 @@ class AnalysisPipelinePersistenceTests(TestCase):
                 "INSERT INTO evidence_forensicevidence"
                 " (user_id, file, file_hash, upload_date)"
                 " VALUES (%s, %s, %s, %s)",
-                [user.pk, 'evidence_files/test.txt', 'b' * 64, timezone.now()],
+                [user.pk, 'evidence_files/test.txt', 'b' * 64, django_timezone.now()],
             )
             ev_id = cur.lastrowid
         return ForensicEvidence.objects.get(pk=ev_id)
