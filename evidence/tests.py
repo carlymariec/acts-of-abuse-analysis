@@ -4,7 +4,6 @@ import json
 import os
 import tempfile
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase
@@ -306,6 +305,7 @@ class CoerciveControlEngineTests(TestCase):
         r = self.engine.analyze_message("You are worthless and I will isolate you.")
         self.assertGreaterEqual(r['severity'], 2)
         self.assertGreater(len(r['categories']), 0)
+
     def test_no_duplicate_categories(self):
         r = self.engine.analyze_message(
             "You are worthless and pathetic, you are nothing."
@@ -602,8 +602,8 @@ class MergeWindowsTests(TestCase):
         self.assertEqual(result, [(0, 8)])
 
     def test_adjacent_windows_merged(self):
-        # Windows (0,5) and (5,10) are adjacent — should merge to (0,10).
-        result = merge_windows([(0, 5), (5, 10)])
+        # Windows (0,5) and (6,10) are adjacent — should merge to (0,10).
+        result = merge_windows([(0, 5), (6, 10)])
         self.assertEqual(result, [(0, 10)])
 
     def test_unsorted_input_is_sorted_first(self):
