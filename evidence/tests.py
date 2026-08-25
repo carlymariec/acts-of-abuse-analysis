@@ -602,8 +602,8 @@ class MergeWindowsTests(TestCase):
         self.assertEqual(result, [(0, 8)])
 
     def test_adjacent_windows_merged(self):
-        # Windows (0,5) and (5,10) are adjacent — should merge to (0,10).
-        result = merge_windows([(0, 5), (5, 10)])
+        # Windows (0,5) and (6,10) are adjacent — should merge to (0,10).
+        result = merge_windows([(0, 5), (6, 10)])
         self.assertEqual(result, [(0, 10)])
 
     def test_unsorted_input_is_sorted_first(self):
