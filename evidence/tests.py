@@ -4,7 +4,6 @@ import json
 import os
 import tempfile
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase
