@@ -658,15 +658,15 @@ class AnalysisPipelinePersistenceTests(TestCase):
 
         User = get_user_model()
         user = User.objects.create_user(username='testuser', password='pw')
-        with patch.object(ForensicEvidence, "save", return_value=None):
-            ev = ForensicEvidence.__new__(ForensicEvidence)
-            ev.user = user
-            ev.file_hash = 'a' * 64
-            # We store a fake file attr to avoid full media stack.
-            ev.file = None
-            ev.pk = None
-            # Keep a fake pk to mimic a persisted object in tests that require it.
-            ev.pk = 1  # fake pk
+        ev = ForensicEvidence.__new__(ForensicEvidence)
+        ev.user = user
+        ev.file_hash = 'a' * 64
+        # We store a fake file attr to avoid full media stack.
+        ev.file = None
+        # Bypass persistence logic in tests that require an evidence-like object.
+        ev.save = lambda *a, **kw: None
+        # Keep a fake pk to mimic a persisted object in tests that require it.
+        ev.pk = 1  # fake pk
         return ev
 
     def _make_real_evidence(self):
