@@ -25,7 +25,7 @@ def import_parser(platform_name):
     Dynamically imports the correct parser module using importlib.
     Only modules from the pre-approved whitelist are allowed.
     """
-    name = platform_name.lower()
+    name = str(platform_name).lower()
     if name not in _ALLOWED_PARSERS:
         raise ValueError(
             f"'{platform_name}' is not a recognised parser. "
@@ -36,7 +36,12 @@ def import_parser(platform_name):
     for module_path in (f'evidence.parsers.{name}', f'parsers.{name}'):
         try:
             return importlib.import_module(module_path)
-        except ImportError:
+        except ModuleNotFoundError as exc:
+            # Only fall through when the target module itself is missing.
+            # If a dependency inside the module is missing, re-raise so the
+            # caller gets the real import failure instead of a false "not found".
+            if exc.name != module_path:
+                raise
             continue
     raise ValueError(f"Parser for {platform_name} not found.")
 
@@ -72,11 +77,12 @@ def process_upload(file_path):
     Returns extracted data from the appropriate parser.
     """
     platform = None
-    if file_path.endswith('.json'):
+    lower_path = file_path.lower()
+    if lower_path.endswith('.json'):
         platform = _detect_json_platform(file_path)
-    elif file_path.endswith('.txt'):
+    elif lower_path.endswith('.txt'):
         platform = 'whatsapp'  # WhatsApp txt exports
-    elif file_path.endswith('.pdf'):
+    elif lower_path.endswith('.pdf'):
         platform = 'pdf'       # PDF format
 
     if platform:

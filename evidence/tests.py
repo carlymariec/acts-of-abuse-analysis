@@ -211,6 +211,18 @@ class FacebookParserTests(TestCase):
         finally:
             os.unlink(f.name)
 
+    def test_extension_detection_is_case_insensitive(self):
+        f = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.TXT', delete=False, encoding='utf-8'
+        )
+        f.write("01/15/2024, 10:30:00 - Alice: Hello\n")
+        f.close()
+        try:
+            msgs = process_upload(f.name)
+            self.assertIsInstance(msgs, list)
+        finally:
+            os.unlink(f.name)
+
 
 # ---------------------------------------------------------------------------
 # Discord parser
@@ -338,6 +350,16 @@ class CoerciveControlEngineTests(TestCase):
         )
         self.assertEqual(r['severity'], 4)
         self.assertTrue(r['institutional_abuse'])
+
+    def test_institutional_cps_detection_is_case_insensitive(self):
+        r = self.engine.analyze_message("I will call cps and report you.")
+        self.assertTrue(r['institutional_abuse'])
+        self.assertEqual(r['severity'], 4)
+
+    def test_non_string_input_is_handled_safely(self):
+        r = self.engine.analyze_message(None)
+        self.assertEqual(r['severity'], 1)
+        self.assertEqual(r['all_flags'], [])
 
 
 # ---------------------------------------------------------------------------
