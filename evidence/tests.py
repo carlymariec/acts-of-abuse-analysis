@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase
@@ -323,6 +324,12 @@ class CoerciveControlEngineTests(TestCase):
             "You are worthless and pathetic, you are nothing."
         )
         self.assertEqual(len(r['categories']), len(set(r['categories'])))
+
+    def test_match_wheel_includes_threshold_boundary(self):
+        wheel = {'Boundary Category': ['boundary keyword']}
+        with patch('evidence.analysis_engine.fuzz.partial_ratio', return_value=85):
+            matched = self.engine._match_wheel(wheel, 'irrelevant text')
+        self.assertEqual(matched, ['Boundary Category'])
 
     def test_economic_abuse_detected(self):
         r = self.engine.analyze_message("I drained the account and called your boss.")
