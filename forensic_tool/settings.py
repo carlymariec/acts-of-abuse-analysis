@@ -22,16 +22,32 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 _default_secret = 'django-insecure-ul68urgo5uyrk_2ui#a_u8*trx&1dtxn96e6x!&rk5*8hw8@q('
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', _default_secret)
+_env_secret = os.environ.get('DJANGO_SECRET_KEY')
+SECRET_KEY = _env_secret or _default_secret
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False') == 'True'
 
+def _is_valid_production_secret_key(secret_key, env_secret_key, default_secret):
+    if env_secret_key is None:
+        return False
+    if not env_secret_key.strip():
+        return False
+    if secret_key == default_secret:
+        return False
+    if len(env_secret_key.strip()) < 50:
+        return False
+    return True
+
+
 # Enforce a real SECRET_KEY in production
-if not DEBUG and SECRET_KEY == _default_secret:
+if not DEBUG and not _is_valid_production_secret_key(
+    SECRET_KEY, _env_secret, _default_secret
+):
     raise RuntimeError(
-        "DJANGO_SECRET_KEY environment variable must be set to a unique, "
-        "unpredictable value before running in production (DEBUG=False)."
+        "DJANGO_SECRET_KEY must be set to a non-empty, unique, unpredictable "
+        "value at least 50 characters long before running in production "
+        "(DEBUG=False)."
     )
 
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')

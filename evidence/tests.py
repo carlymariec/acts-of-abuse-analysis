@@ -20,6 +20,7 @@ from evidence.normalization import (
     normalize_messages,
 )
 from evidence.views import generate_timeline
+from forensic_tool.settings import _default_secret, _is_valid_production_secret_key
 
 
 # ---------------------------------------------------------------------------
@@ -791,3 +792,31 @@ class AnalysisPipelinePersistenceTests(TestCase):
         self.assertEqual(saved.conversation_id, '')
         self.assertEqual(saved.message_id, '')
         self.assertEqual(saved.source_platform, '')
+
+
+class SecretKeyValidationTests(TestCase):
+    def test_rejects_missing_env_secret(self):
+        self.assertFalse(
+            _is_valid_production_secret_key(_default_secret, None, _default_secret)
+        )
+
+    def test_rejects_blank_env_secret(self):
+        self.assertFalse(
+            _is_valid_production_secret_key('', '   ', _default_secret)
+        )
+
+    def test_rejects_short_env_secret(self):
+        short_secret = 'short-secret'
+        self.assertFalse(
+            _is_valid_production_secret_key(
+                short_secret, short_secret, _default_secret
+            )
+        )
+
+    def test_accepts_long_non_default_env_secret(self):
+        strong_secret = 'a' * 50
+        self.assertTrue(
+            _is_valid_production_secret_key(
+                strong_secret, strong_secret, _default_secret
+            )
+        )
