@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase
@@ -19,6 +20,7 @@ from evidence.normalization import (
     normalize_messages,
 )
 from evidence.views import generate_timeline
+from forensic_tool.settings import _default_secret, _is_valid_production_secret_key
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +213,18 @@ class FacebookParserTests(TestCase):
         finally:
             os.unlink(f.name)
 
+    def test_extension_detection_is_case_insensitive(self):
+        f = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.TXT', delete=False, encoding='utf-8'
+        )
+        f.write("01/15/2024, 10:30:00 - Alice: Hello\n")
+        f.close()
+        try:
+            msgs = process_upload(f.name)
+            self.assertIsInstance(msgs, list)
+        finally:
+            os.unlink(f.name)
+
 
 # ---------------------------------------------------------------------------
 # Discord parser
@@ -312,6 +326,12 @@ class CoerciveControlEngineTests(TestCase):
         )
         self.assertEqual(len(r['categories']), len(set(r['categories'])))
 
+    def test_match_wheel_includes_threshold_boundary(self):
+        wheel = {'Boundary Category': ['boundary keyword']}
+        with patch('evidence.analysis_engine.fuzz.partial_ratio', return_value=85):
+            matched = self.engine._match_wheel(wheel, 'irrelevant text')
+        self.assertEqual(matched, ['Boundary Category'])
+
     def test_economic_abuse_detected(self):
         r = self.engine.analyze_message("I drained the account and called your boss.")
         self.assertGreaterEqual(r['severity'], 3)
@@ -338,6 +358,16 @@ class CoerciveControlEngineTests(TestCase):
         )
         self.assertEqual(r['severity'], 4)
         self.assertTrue(r['institutional_abuse'])
+
+    def test_institutional_cps_detection_is_case_insensitive(self):
+        r = self.engine.analyze_message("I will call cps and report you.")
+        self.assertTrue(r['institutional_abuse'])
+        self.assertEqual(r['severity'], 4)
+
+    def test_non_string_input_is_handled_safely(self):
+        r = self.engine.analyze_message(None)
+        self.assertEqual(r['severity'], 1)
+        self.assertEqual(r['all_flags'], [])
 
 
 # ---------------------------------------------------------------------------
@@ -762,3 +792,31 @@ class AnalysisPipelinePersistenceTests(TestCase):
         self.assertEqual(saved.conversation_id, '')
         self.assertEqual(saved.message_id, '')
         self.assertEqual(saved.source_platform, '')
+
+
+class SecretKeyValidationTests(TestCase):
+    def test_rejects_missing_env_secret(self):
+        self.assertFalse(
+            _is_valid_production_secret_key(_default_secret, None, _default_secret)
+        )
+
+    def test_rejects_blank_env_secret(self):
+        self.assertFalse(
+            _is_valid_production_secret_key('', '   ', _default_secret)
+        )
+
+    def test_rejects_short_env_secret(self):
+        short_secret = 'short-secret'
+        self.assertFalse(
+            _is_valid_production_secret_key(
+                short_secret, short_secret, _default_secret
+            )
+        )
+
+    def test_accepts_long_non_default_env_secret(self):
+        strong_secret = 'a' * 50
+        self.assertTrue(
+            _is_valid_production_secret_key(
+                strong_secret, strong_secret, _default_secret
+            )
+        )

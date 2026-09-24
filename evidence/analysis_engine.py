@@ -198,7 +198,7 @@ class CoerciveControlEngine:
 
         # Institutional DARVO / Systemic Abuse indicators
         self.systemic_abuse = [
-            'CPS', 'court', 'judge', 'law enforcement', 'police', 'social worker',
+            'cps', 'court', 'judge', 'law enforcement', 'police', 'social worker',
         ]
 
     def _match_wheel(self, wheel, text_lower):
@@ -209,7 +209,7 @@ class CoerciveControlEngine:
         matched = []
         for category, keywords in wheel.items():
             for word in keywords:
-                if fuzz.partial_ratio(word, text_lower) > _FUZZY_MATCH_THRESHOLD:
+                if fuzz.partial_ratio(word, text_lower) >= _FUZZY_MATCH_THRESHOLD:
                     matched.append(category)
                     break  # one match per category is sufficient
         return matched
@@ -231,7 +231,8 @@ class CoerciveControlEngine:
             'all_flags': [],
         }
 
-        text_lower = text.lower()
+        # Normalize non-string inputs to avoid runtime errors in analysis pipelines.
+        text_lower = str(text or '').lower()
 
         # Post-Separation Power & Control Wheel
         matched_duluth = self._match_wheel(self.duluth_categories, text_lower)

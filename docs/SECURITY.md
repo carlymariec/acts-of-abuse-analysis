@@ -123,7 +123,7 @@ In addition to the upload scanner:
 
 The `forensic_tool/settings.py` configuration includes:
 
-- `SECRET_KEY` read from an environment variable — never hard-coded.
+- `SECRET_KEY` is read from `DJANGO_SECRET_KEY` in production; startup is blocked when `DEBUG=False` unless `DJANGO_SECRET_KEY` is non-empty, not the default fallback, and at least 50 characters long.
 - `DEBUG = False` in production.
 - Standard HTTP security headers:
   - `SECURE_BROWSER_XSS_FILTER`
