@@ -9,6 +9,7 @@ import { runAnalysisPipeline } from './server/analysisPipeline.ts';
 import {
   FileValidationError,
   MAX_EVIDENCE_FILE_SIZE_BYTES,
+  sanitizeFilename,
   validateEvidenceUpload,
 } from './server/fileSecurity.ts';
 import { computeFileHash, processUpload } from './server/parsers.ts';
@@ -19,8 +20,8 @@ import {
   getEvidenceById,
   getStorageCounts,
   hasEvidenceHash,
-  listEvidence,
   listEvents,
+  purgeAllData,
   searchEvidence,
   searchEvents,
   unifiedFullTextSearch,
@@ -36,6 +37,7 @@ const LEGAL_DISCLAIMER =
   'EDUCATIONAL & PERSONAL USE ONLY: Screening output based on peer-reviewed scientific literature and the DAIP Duluth Model Power & Control Wheels. Not legal, medical, or expert forensic advice. Provided "AS IS" without warranty or liability; all attributions, OCR outputs, and citations must be independently verified by the user.';
 
 const app = express();
+app.disable('x-powered-by');
 const engine = new CoerciveControlEngine();
 
 const upload = multer({
@@ -43,17 +45,34 @@ const upload = multer({
   limits: { fileSize: MAX_EVIDENCE_FILE_SIZE_BYTES },
 });
 
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '1mb' }));
 
-// Security headers matching Django hardened settings
-app.use((_req, res, next) => {
+// Anti-surveillance & zero-leakage HTTP security headers
+app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  res.setHeader(
+    'Permissions-Policy',
+    'geolocation=(), camera=(), microphone=(), usb=(), bluetooth=(), accelerometer=(), gyroscope=(), magnetometer=(), midi=(), serial=()'
+  );
+  if (isProduction) {
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    );
+  }
+  if (req.path.startsWith('/api/')) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
   next();
 });
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', storage: 'sqlite', ...getStorageCounts() });
+  res.json({ status: 'ok', storage: 'sqlite_encrypted_vault', ...getStorageCounts() });
 });
 
 app.get('/api/evidence', (req, res) => {
@@ -100,7 +119,8 @@ app.post('/api/evidence/upload', upload.single('file'), async (req, res) => {
       return;
     }
 
-    const { originalname, buffer, size } = req.file;
+    const safeFilename = sanitizeFilename(req.file.originalname);
+    const { buffer, size } = req.file;
     const tzName = typeof req.body?.tz_name === 'string' && req.body.tz_name.trim()
       ? req.body.tz_name.trim()
       : 'UTC';
@@ -111,7 +131,7 @@ app.post('/api/evidence/upload', upload.single('file'), async (req, res) => {
     const counterParty =
       typeof req.body?.counter_party === 'string' ? req.body.counter_party.trim() : '';
 
-    validateEvidenceUpload(originalname, buffer);
+    validateEvidenceUpload(safeFilename, buffer);
 
     const fileHash = computeFileHash(buffer);
     if (hasEvidenceHash(fileHash)) {
@@ -122,7 +142,7 @@ app.post('/api/evidence/upload', upload.single('file'), async (req, res) => {
     }
 
     const { platform, documentCategory, messages, ocrUsed, ocrConfidence } = await processUpload(
-      originalname,
+      safeFilename,
       buffer
     );
 
@@ -130,7 +150,7 @@ app.post('/api/evidence/upload', upload.single('file'), async (req, res) => {
     try {
       const evidence = createEvidence(
         {
-          filename: originalname,
+          filename: safeFilename,
           file_size: size,
           file_hash: fileHash,
           upload_date: new Date().toISOString(),
@@ -147,6 +167,8 @@ app.post('/api/evidence/upload', upload.single('file'), async (req, res) => {
             medical_ids: 0,
             addresses: 0,
             dob: 0,
+            locations: 0,
+            network_and_devices: 0,
           },
           ocr_used: ocrUsed,
           ocr_confidence: ocrConfidence,
@@ -233,6 +255,15 @@ app.delete('/api/evidence/:id', (req, res) => {
     return;
   }
   res.json({ deleted: true, id });
+});
+
+app.delete('/api/vault/purge', (req, res) => {
+  if (req.body?.confirm !== 'PURGE_ALL_LOCAL_EVIDENCE') {
+    res.status(400).json({ error: 'Explicit purge confirmation token is required.' });
+    return;
+  }
+  const result = purgeAllData();
+  res.json({ purged: true, ...result });
 });
 
 app.get('/api/events', (req, res) => {
@@ -407,12 +438,12 @@ app.post('/api/analyze', (req, res) => {
   res.json({ legal_disclaimer: LEGAL_DISCLAIMER, result });
 });
 
-app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (err instanceof multer.MulterError) {
     res.status(400).json({ error: `Upload error: ${err.message}` });
     return;
   }
-  next(err);
+  res.status(500).json({ error: 'An internal processing error occurred.' });
 });
 
 async function startServer() {

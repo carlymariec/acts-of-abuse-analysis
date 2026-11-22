@@ -56,6 +56,8 @@ export function EvidenceUploadPanel({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [hashCheckStatus, setHashCheckStatus] = useState<Record<number, string>>({});
+  const [confirmPurgeOpen, setConfirmPurgeOpen] = useState(false);
+  const [purging, setPurging] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -131,6 +133,30 @@ export function EvidenceUploadPanel({
     }
   }
 
+  async function handlePurgeAll() {
+    setPurging(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch('/api/vault/purge', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: 'PURGE_ALL_LOCAL_EVIDENCE' }),
+      });
+      if (res.ok) {
+        setConfirmPurgeOpen(false);
+        setSuccessMsg(
+          'All local SQLite records, FTS5 search indexes, and AES-256-GCM encrypted vault files were overwritten and permanently erased.'
+        );
+        await onDeleted();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setErrorMsg(data.error || 'Failed to purge local data.');
+      }
+    } finally {
+      setPurging(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-xs">
@@ -200,7 +226,7 @@ export function EvidenceUploadPanel({
                 Enable PII Sanitization with Role-Locked Sender/Receiver Attribution Check
               </label>
               <span className="text-xs text-slate-500">
-                Masks SSNs, phones, emails, addresses, DOBs, financial &amp; medical IDs while keeping distinct party tokens
+                Masks SSNs, phones, emails, addresses, DOBs, GPS/map links, IPs, device/financial/medical IDs while keeping distinct party tokens
               </span>
             </div>
 
@@ -260,13 +286,51 @@ export function EvidenceUploadPanel({
       <div className="rounded-lg border border-slate-200 bg-white shadow-xs overflow-hidden">
         <div className="border-b border-slate-200 px-6 py-4 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-base font-semibold text-slate-900">
-              Forensic Evidence Chain of Custody ({evidenceList.length})
-            </h3>
-            <span className="text-xs text-slate-500">
-              Persisted locally in SQLite &amp; SHA-256 evidence vault · FTS5 full-text indexed
-            </span>
+            <div>
+              <h3 className="text-base font-semibold text-slate-900">
+                Forensic Evidence Chain of Custody ({evidenceList.length})
+              </h3>
+              <span className="text-xs text-slate-500">
+                AES-256-GCM encrypted vault &amp; local SQLite FTS5 index · zero external transmission
+              </span>
+            </div>
+            {evidenceList.length > 0 && !confirmPurgeOpen && (
+              <button
+                type="button"
+                onClick={() => setConfirmPurgeOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-white px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Secure Wipe All Data
+              </button>
+            )}
           </div>
+
+          {confirmPurgeOpen && (
+            <div className="rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-950 flex flex-wrap items-center justify-between gap-3">
+              <span>
+                <strong>Confirm Permanent Wipe:</strong> This overwrites encrypted vault files and permanently erases all stored evidence, events, and search indexes from this device.
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={purging}
+                  onClick={handlePurgeAll}
+                  className="rounded bg-red-700 px-3 py-1 font-semibold text-white hover:bg-red-800 disabled:opacity-50"
+                >
+                  {purging ? 'Wiping...' : 'Yes, Permanently Erase'}
+                </button>
+                <button
+                  type="button"
+                  disabled={purging}
+                  onClick={() => setConfirmPurgeOpen(false)}
+                  className="rounded border border-slate-300 bg-white px-3 py-1 font-medium text-slate-700 hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="sm:col-span-2 relative">

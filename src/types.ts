@@ -95,6 +95,8 @@ export interface PiiRedactionCounts {
   medical_ids: number;
   addresses: number;
   dob: number;
+  locations?: number;
+  network_and_devices?: number;
 }
 
 export interface PartyTokenMapping {

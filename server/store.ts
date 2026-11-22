@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -17,9 +18,10 @@ import type {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const MAX_FULL_TEXT_INDEX_CHARS = 500_000;
+const VAULT_MAGIC = Buffer.from('AOAE', 'ascii');
 
 function resolveDataDir(): string {
-  const configured = process.env.DATA_DIR?.trim();
+  const configured = process.env.EVIDENCE_DATA_DIR?.trim();
   if (configured) {
     return path.isAbsolute(configured) ? configured : path.resolve(PROJECT_ROOT, configured);
   }
@@ -30,7 +32,77 @@ export const DATA_DIR = resolveDataDir();
 export const DB_PATH = path.join(DATA_DIR, 'forensic_evidence.db');
 export const VAULT_DIR = path.join(DATA_DIR, 'vault');
 
-fs.mkdirSync(VAULT_DIR, { recursive: true });
+fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+fs.mkdirSync(VAULT_DIR, { recursive: true, mode: 0o700 });
+
+function loadOrCreateVaultKey(): Buffer {
+  const envSecret = process.env.APP_SECRET?.trim();
+  if (envSecret && envSecret !== 'change-me-in-production' && envSecret.length >= 16) {
+    return crypto.scryptSync(envSecret, 'acts-of-abuse-vault-v1', 32);
+  }
+  const keyFilePath = path.join(DATA_DIR, '.vault.key');
+  if (fs.existsSync(keyFilePath)) {
+    const hex = fs.readFileSync(keyFilePath, 'utf8').trim();
+    if (/^[a-f0-9]{64}$/i.test(hex)) {
+      return Buffer.from(hex, 'hex');
+    }
+  }
+  const generated = crypto.randomBytes(32);
+  fs.writeFileSync(keyFilePath, generated.toString('hex'), { mode: 0o600 });
+  return generated;
+}
+
+const VAULT_KEY = loadOrCreateVaultKey();
+
+function encryptVaultBuffer(plain: Buffer): Buffer {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', VAULT_KEY, iv);
+  const encrypted = Buffer.concat([cipher.update(plain), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return Buffer.concat([VAULT_MAGIC, iv, authTag, encrypted]);
+}
+
+function decryptVaultBuffer(stored: Buffer): Buffer {
+  if (
+    stored.length >= 32 &&
+    stored.subarray(0, 4).equals(VAULT_MAGIC)
+  ) {
+    const iv = stored.subarray(4, 16);
+    const authTag = stored.subarray(16, 32);
+    const ciphertext = stored.subarray(32);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', VAULT_KEY, iv);
+    decipher.setAuthTag(authTag);
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  }
+  // Legacy unencrypted fallback
+  return stored;
+}
+
+function secureDeleteFile(filePath: string): void {
+  if (!filePath || !fs.existsSync(filePath)) return;
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.isFile() && stat.size > 0) {
+      const zeros = Buffer.alloc(Math.min(stat.size, 65536));
+      const fd = fs.openSync(filePath, 'r+');
+      try {
+        let offset = 0;
+        while (offset < stat.size) {
+          const chunk = Math.min(zeros.length, stat.size - offset);
+          crypto.randomFillSync(zeros, 0, chunk);
+          fs.writeSync(fd, zeros, 0, chunk, offset);
+          offset += chunk;
+        }
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+    fs.unlinkSync(filePath);
+  } catch {
+    // Best-effort cleanup
+  }
+}
 
 const db = new DatabaseSync(DB_PATH);
 db.exec(`
@@ -244,6 +316,11 @@ function rowToEvent(row: AnalyzedEventRow): AnalyzedEventRecord {
 }
 
 function vaultFilePath(fileHash: string): string {
+  const safeHash = fileHash.replace(/[^a-fA-F0-9]/g, '');
+  return path.join(VAULT_DIR, `${safeHash}.enc`);
+}
+
+function legacyVaultFilePath(fileHash: string): string {
   const safeHash = fileHash.replace(/[^a-fA-F0-9]/g, '');
   return path.join(VAULT_DIR, `${safeHash}.bin`);
 }
@@ -505,9 +582,10 @@ export function createEvidence(
   buffer: Buffer,
   fullTextIndex = ''
 ): ForensicEvidenceRecord {
-  fs.mkdirSync(VAULT_DIR, { recursive: true });
+  fs.mkdirSync(VAULT_DIR, { recursive: true, mode: 0o700 });
   const targetVaultPath = vaultFilePath(input.file_hash);
-  fs.writeFileSync(targetVaultPath, buffer);
+  const encryptedPayload = encryptVaultBuffer(buffer);
+  fs.writeFileSync(targetVaultPath, encryptedPayload, { mode: 0o600 });
   const boundedText = fullTextIndex.slice(0, MAX_FULL_TEXT_INDEX_CHARS);
 
   try {
@@ -541,9 +619,7 @@ export function createEvidence(
     } catch {
       // Ignore rollback if transaction was not active
     }
-    if (fs.existsSync(targetVaultPath)) {
-      fs.unlinkSync(targetVaultPath);
-    }
+    secureDeleteFile(targetVaultPath);
     throw err;
   }
 }
@@ -560,12 +636,15 @@ export function getEvidenceById(id: number): ForensicEvidenceRecord | undefined 
 export function getEvidenceBuffer(id: number): Buffer | undefined {
   const row = stmtGetEvidenceById.get(id) as EvidenceRow | undefined;
   if (!row) return undefined;
-  if (row.vault_path && fs.existsSync(row.vault_path)) {
-    return fs.readFileSync(row.vault_path);
-  }
-  const fallbackPath = vaultFilePath(row.file_hash);
-  if (fs.existsSync(fallbackPath)) {
-    return fs.readFileSync(fallbackPath);
+  const candidates = [
+    row.vault_path,
+    vaultFilePath(row.file_hash),
+    legacyVaultFilePath(row.file_hash),
+  ].filter(Boolean);
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      return decryptVaultBuffer(fs.readFileSync(p));
+    }
   }
   return undefined;
 }
@@ -650,17 +729,56 @@ export function deleteEvidence(id: number): boolean {
     throw err;
   }
 
-  const candidatePaths = [row.vault_path, vaultFilePath(row.file_hash)].filter(Boolean);
+  const candidatePaths = [
+    row.vault_path,
+    vaultFilePath(row.file_hash),
+    legacyVaultFilePath(row.file_hash),
+  ].filter(Boolean);
   for (const p of new Set(candidatePaths)) {
-    if (fs.existsSync(p)) {
-      try {
-        fs.unlinkSync(p);
-      } catch {
-        // Ignore cleanup race if already deleted
-      }
-    }
+    secureDeleteFile(p);
   }
   return true;
+}
+
+export function purgeAllData(): { deleted_evidence: number; deleted_events: number } {
+  const counts = getStorageCounts();
+  const rows = db.prepare('SELECT file_hash, vault_path FROM evidence').all() as Array<{
+    file_hash: string;
+    vault_path: string;
+  }>;
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec('DELETE FROM events_fts');
+    db.exec('DELETE FROM evidence_fts');
+    db.exec('DELETE FROM analyzed_events');
+    db.exec('DELETE FROM evidence');
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  for (const row of rows) {
+    for (const p of new Set([
+      row.vault_path,
+      vaultFilePath(row.file_hash),
+      legacyVaultFilePath(row.file_hash),
+    ])) {
+      secureDeleteFile(p);
+    }
+  }
+
+  if (fs.existsSync(VAULT_DIR)) {
+    for (const entry of fs.readdirSync(VAULT_DIR)) {
+      secureDeleteFile(path.join(VAULT_DIR, entry));
+    }
+  }
+
+  return {
+    deleted_evidence: counts.evidence_count,
+    deleted_events: counts.events_count,
+  };
 }
 
 function insertSingleEvent(input: Omit<AnalyzedEventRecord, 'id'>): AnalyzedEventRecord {

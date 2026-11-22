@@ -14,14 +14,14 @@ The application runs as a full-stack TypeScript web application on **Node.js 22*
 |--------|---------|
 | `server/corpusTaxonomy.ts` | Comprehensive multi-framework tactic taxonomy (`CORPUS_TAXONOMY`, 62 categories across 11 framework wheels derived from the research corpus) with keywords, regex phrase patterns, severity weights, and academic citations |
 | `server/analysisEngine.ts` | `CoerciveControlEngine` — multi-layer extraction engine combining contraction normalization, word-boundary matching, broad regex phrase patterns, and sliding-window `partialRatio` (> 90) fuzzy matching; evaluates every tactic without early exit and returns `tactics_analyzed`, `matched_indicators`, `all_flags`, and framework-specific flag arrays |
-| `server/fileSecurity.ts` | Upload security validation: extension whitelist (`.txt`, `.json`, `.eml`, `.csv`, `.xml`, `.pdf`, `.docx`, `.rtf`, `.html`, `.md`, `.log`, and images `.png`/`.jpg`/`.webp`/`.bmp`/`.tif`), 50 MB limit, 8-byte executable magic-byte blocking (PE, ELF, Mach-O, shebang), and text/markup injection-pattern scanning |
+| `server/fileSecurity.ts` | Upload security validation: filename sanitization, extension whitelist (`.txt`, `.json`, `.eml`, `.csv`, `.xml`, `.pdf`, `.docx`, `.rtf`, `.html`, `.md`, `.log`, and images `.png`/`.jpg`/`.webp`/`.bmp`/`.tif`), 50 MB limit, executable/OLE2 macro magic-byte blocking, container signature verification, and XSS/DDE injection scanning |
 | `server/ocrEngine.ts` | Local, privacy-preserving OCR engine (`sharp` EXIF rotation, Lanczos upscaling, grayscale, normalization, sharpening + `tesseract.js` using local `@tesseract.js-data/eng` 4.0.0_best_int LSTM) returning line-level confidence and citations |
-| `server/piiSanitizer.ts` | Deterministic PII sanitizer (SSNs, emails, phones, addresses, DOBs, financial/medical IDs) with role-locked sender/receiver/3P tokenization and strict post-sanitization attribution & embedded-header conflict verification (`AttributionAudit`) |
-| `server/parsers.ts` | Multi-format parsers (`eml` via `mailparser`, `csv` via `csv-parse`, `xml` via `fast-xml-parser`, `docx` via `mammoth`, `pdf` via `unpdf`, `whatsapp`, `facebook`, `discord`, `ocr`, `generic`) with exact file & placement citations and SHA-256 hashing |
+| `server/piiSanitizer.ts` | Deterministic PII & anti-tracking sanitizer (SSNs, emails, phones, addresses, DOBs, GPS coordinates, map tracking links, IPv4s, MAC/IMEI/device IDs, URL tracking params, financial/medical IDs) with role-locked party tokenization and strict attribution checks |
+| `server/parsers.ts` | Multi-format parsers (`eml` via `mailparser`, `csv` via `csv-parse`, `xml` via `fast-xml-parser`, `docx` via `mammoth`, `pdf` via `unpdf`, `whatsapp`, `facebook`, `discord`, `ocr`, `generic`) stripping HTML tracking beacons with exact placement citations and SHA-256 hashing |
 | `server/chronologyEngine.ts` | Event Sectioner & Chronology builder grouping cross-source events by day, month, document category, or framework with exact file, SHA-256 prefix, and page/row/line/XML/OCR placement citations |
 | `server/normalization.ts` | Message normalization, DST-safe `localDayBounds`, and merged context-window generation |
 | `server/analysisPipeline.ts` | Runs PII sanitization + attribution verification, `CoerciveControlEngine`, context windowing, and persists `placement_citation` + `attribution_audit` on flagged events |
-| `server/store.ts` | Persistent SQLite (`node:sqlite` WAL mode), FTS5 full-text search index (`evidence_fts`, `events_fts` with `porter unicode61` & BM25 ranking), & SHA-256 evidence vault (`data/forensic_evidence.db`, `data/vault/`) |
+| `server/store.ts` | Persistent SQLite (`node:sqlite` WAL mode), FTS5 full-text search index (`evidence_fts`, `events_fts` with `porter unicode61` & BM25 ranking), & AES-256-GCM encrypted vault (`data/forensic_evidence.db`, `data/vault/*.enc`) with random-overwrite secure deletion |
 | `server.ts` | Express server on port `3000` (`0.0.0.0`) serving `/api/*` endpoints and Vite SPA / production `dist/` |
 | `src/components/` | React UI: `EvidenceUploadPanel`, `AnalyzedEventsPanel`, `ChronologySectionerPanel`, `TimelineChart`, and `MessageAnalyzerPanel` |
 
@@ -81,8 +81,9 @@ Every call to `POST /api/analyze` returns:
 | `GET /api/evidence` | Lists or FTS5-searches (`?search=`, `document_category`, `detected_platform`) ingested evidence records and extracted full document text |
 | `GET /api/search` | Unified FTS5 full-text search (`?q=`, `scope=all\|evidence\|events`, `limit=`) returning BM25-ranked evidence & event matches with highlighted snippets |
 | `POST /api/evidence/upload` | Validates, hashes, parses (`.eml`, `.csv`, `.xml`, `.docx`, `.pdf`, `.txt`, `.json`, `.rtf`, `.html`, images via OCR), sanitizes PII with strict attribution verification, indexes full text, and runs `runAnalysisPipeline` |
-| `GET /api/evidence/:id/verify-hash` | Re-computes SHA-256 against stored vault evidence bytes to verify integrity |
-| `DELETE /api/evidence/:id` | Deletes an evidence record, its FTS5 entries, its vault file, and its associated events |
+| `GET /api/evidence/:id/verify-hash` | Re-computes SHA-256 against decrypted AES-256-GCM vault evidence bytes to verify integrity |
+| `DELETE /api/evidence/:id` | Cryptographically overwrites and deletes an evidence record, its FTS5 entries, its vault file, and its associated events |
+| `DELETE /api/vault/purge` | Requires `{ confirm: "PURGE_ALL_LOCAL_EVIDENCE" }` to overwrite all vault blobs and wipe SQLite/FTS5 records |
 | `GET /api/events` | Lists or FTS5-searches flagged events with `severity`, `wheel`, `document_category`, `attribution_status`, `is_verified`, `source_platform`, `date_from`, `date_to`, `search`, and `sort=chronological\|relevance` |
 | `PATCH /api/events/:id` | Updates `is_verified`, `user_context_notes`, `sender`, `receiver`, or `timestamp` |
 | `GET /api/chronology` | Returns sectioned cross-source event chronology (`section_by=day|month|source|framework`) with exact file & placement citations |

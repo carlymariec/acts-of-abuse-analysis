@@ -3,6 +3,7 @@ import {
   Activity,
   CalendarRange,
   Download,
+  EyeOff,
   FileSearch,
   FileText,
   Scale,
@@ -35,6 +36,7 @@ type ActiveTab = 'upload' | 'events' | 'chronology' | 'timeline' | 'analyzer';
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('upload');
   const [disclaimerOpen, setDisclaimerOpen] = useState(false);
+  const [privacyCoverActive, setPrivacyCoverActive] = useState(false);
   const [evidenceList, setEvidenceList] = useState<ForensicEvidenceRecord[]>([]);
   const [events, setEvents] = useState<AnalyzedEventRecord[]>([]);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -155,7 +157,71 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [globalQuery, refreshTrigger]);
 
+  const activatePrivacyCover = useCallback(() => {
+    setPrivacyCoverActive(true);
+    setDisclaimerOpen(false);
+    setGlobalQuery('');
+    setGlobalResults(null);
+    setEvidenceList([]);
+    setEvents([]);
+    setTimeline({ empty: true, message: '', points: [] });
+  }, []);
+
+  const exitPrivacyCover = useCallback(() => {
+    setPrivacyCoverActive(false);
+    void refreshAll();
+  }, [refreshAll]);
+
+  useEffect(() => {
+    let lastEsc = 0;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        const now = Date.now();
+        if (now - lastEsc < 1200) {
+          activatePrivacyCover();
+        }
+        lastEsc = now;
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activatePrivacyCover]);
+
   const verifiedCount = events.filter((e) => e.is_verified).length;
+
+  if (privacyCoverActive) {
+    return (
+      <div className="min-h-screen bg-slate-50 text-slate-900">
+        <header className="border-b border-slate-200 bg-white">
+          <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-4 sm:px-6">
+            <div>
+              <h1 className="text-base font-semibold text-slate-900">
+                Personal Study &amp; Reading Checklist
+              </h1>
+              <p className="text-xs text-slate-500">Weekly organization notes</p>
+            </div>
+            <button
+              type="button"
+              onClick={exitPrivacyCover}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Resume Session
+            </button>
+          </div>
+        </header>
+        <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6 space-y-4">
+          <div className="rounded-lg border border-slate-200 bg-white p-6 space-y-3">
+            <h2 className="text-sm font-semibold text-slate-800">General Weekly Tasks</h2>
+            <ul className="list-disc pl-5 text-sm text-slate-600 space-y-1.5">
+              <li>Organize quarterly reading summaries and citation notes</li>
+              <li>Review library return dates and textbook chapters</li>
+              <li>Update personal calendar reminders for next week</li>
+            </ul>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -175,7 +241,17 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={activatePrivacyCover}
+              title="Immediately hide screen & clear in-memory view (or press Escape twice)"
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800"
+            >
+              <EyeOff className="h-3.5 w-3.5" />
+              Quick Hide (2&times;Esc)
+            </button>
+
             <button
               type="button"
               onClick={() => setDisclaimerOpen(true)}

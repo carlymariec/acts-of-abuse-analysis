@@ -77,7 +77,16 @@ export function LegalDisclaimerModal({ open, onClose }: LegalDisclaimerModalProp
 
           <div>
             <h3 className="text-sm font-semibold text-slate-900">
-              4. Provided &ldquo;AS IS&rdquo; — No Warranty &amp; Limitation of Liability
+              4. Anti-Technology-Abuse &amp; Zero-Leakage Design
+            </h3>
+            <p className="mt-1">
+              This tool is strictly limited to passive analysis of user-uploaded files. It contains zero spyware, stalkerware, live account scraping, remote telemetry, geolocation, camera/microphone, or device-monitoring capabilities, and must never be used for unauthorized device access, surveillance, stalking, harassment, or doxxing. Original evidence files are encrypted at rest with AES-256-GCM, API responses enforce <code className="rounded bg-slate-100 px-1">no-store</code> caching and <code className="rounded bg-slate-100 px-1">no-referrer</code> headers, and PII sanitization scrubs IP addresses, GPS coordinates, map tracking links, and device identifiers alongside contact and financial PII.
+            </p>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">
+              5. Provided &ldquo;AS IS&rdquo; — No Warranty &amp; Limitation of Liability
             </h3>
             <p className="mt-1 uppercase tracking-tight text-slate-600">
               THIS SOFTWARE AND ALL OUTPUTS ARE PROVIDED &ldquo;AS IS&rdquo; AND &ldquo;AS AVAILABLE&rdquo; WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, ACCURACY, COMPLETENESS, OR NON-INFRINGEMENT. TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE AUTHOR(S), COPYRIGHT HOLDER, AND CONTRIBUTORS SHALL NOT BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, CONSEQUENTIAL, SPECIAL, EXEMPLARY, OR PUNITIVE DAMAGES, LEGAL OUTCOMES, CUSTODY OR COURT RULINGS, DEFAMATION OR PRIVACY CLAIMS, OR DATA LOSS ARISING OUT OF OR RELATED TO THE USE OR INABILITY TO USE THIS SOFTWARE OR ITS EXPORTS.

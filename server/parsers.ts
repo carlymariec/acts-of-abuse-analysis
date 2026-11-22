@@ -292,7 +292,12 @@ export function parseDiscord(text: string, filename = 'discord.json'): RawMessag
 
 function stripHtmlTags(html: string): string {
   return html
+    .replace(/<head[\s\S]*?<\/head>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<svg[\s\S]*?<\/svg>/gi, ' ')
+    .replace(/<img\b[^>]*>/gi, ' ')
+    .replace(/<link\b[^>]*>/gi, ' ')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/(p|div|li|tr|h[1-6]|blockquote)>/gi, '\n')
     .replace(/<[^>]+>/g, ' ')
@@ -308,7 +313,7 @@ function stripHtmlTags(html: string): string {
 }
 
 export async function parseEml(buffer: Buffer, filename = 'email.eml'): Promise<RawMessage[]> {
-  const parsed = await simpleParser(buffer);
+  const parsed = await simpleParser(buffer, { skipHtmlToText: true });
 
   const fromText = parsed.from?.text?.trim() || 'Unknown';
   const toList: string[] = [];

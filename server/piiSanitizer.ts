@@ -102,6 +102,19 @@ const STREET_ADDRESS_REGEX =
   /\b\d{1,6}\s+[A-Z0-9][A-Za-z0-9.'-]+(?:\s+[A-Z0-9][A-Za-z0-9.'-]+){0,3}\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Court|Ct|Way|Place|Pl|Circle|Cir|Parkway|Pkwy)\.?(?:\s*(?:#|Apt|Apartment|Unit|Suite|Ste)\.?\s*[A-Za-z0-9-]+)?\b/g;
 const DOB_REGEX =
   /\b(?:dob|date\s+of\s+birth|birth\s*date)\s*[:#-]?\s*(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b/gi;
+const GPS_COORDS_REGEX =
+  /(?:geo:|@|\b(?:lat(?:itude)?|lon(?:gitude)?|gps|coords?)\s*[:=]?\s*)?[-+]?(?:[1-8]?\d(?:\.\d{4,7})|90(?:\.0{4,7})),\s*[-+]?(?:1[0-7]\d(?:\.\d{4,7})|[1-9]?\d(?:\.\d{4,7})|180(?:\.0{4,7}))\b/gi;
+const MAP_TRACKING_LINK_REGEX =
+  /\bhttps?:\/\/(?:maps\.google\.com|www\.google\.com\/maps|maps\.app\.goo\.gl|goo\.gl\/maps|maps\.apple\.com|waze\.com\/ul|what3words\.com)\S*/gi;
+const IPV4_REGEX =
+  /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b/g;
+const MAC_ADDRESS_REGEX = /\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b/g;
+const DEVICE_SERIAL_REGEX =
+  /\b(?:imei|imsi|udid|iccid|serial\s*(?:#|no\.?|number)?)\s*[:#-]?\s*[A-Z0-9-]{8,24}\b/gi;
+const URL_TRACKING_PARAM_REGEX =
+  /([?&])(?:utm_[a-z_]+|fbclid|gclid|igshid|mc_eid|ref_id|trk|tracking_id)=[^&\s]+/gi;
+const TRACKING_BEACON_URL_REGEX =
+  /\[?https?:\/\/[^\s\]]*(?:\/(?:px|pixel|beacon|track(?:ing)?|open|1x1)\.(?:gif|png|jpg|svg)|track(?:er|ing)\.)[^\s\]]*\]?/gi;
 
 export function sanitizeAndVerifyBatch(
   rawMessages: RawMessage[],
@@ -119,6 +132,8 @@ export function sanitizeAndVerifyBatch(
     medical_ids: 0,
     addresses: 0,
     dob: 0,
+    locations: 0,
+    network_and_devices: 0,
   };
 
   // Deterministic registry mapping canonical email/phone/name -> unique token
@@ -200,6 +215,46 @@ export function sanitizeAndVerifyBatch(
       count++;
       return '[FINANCIAL-ID-REDACTED]';
     });
+
+    // Map links and GPS coordinates (anti-geolocation leak)
+    text = text.replace(MAP_TRACKING_LINK_REGEX, () => {
+      piiTotals.locations = (piiTotals.locations || 0) + 1;
+      count++;
+      return '[MAP-LINK-REDACTED]';
+    });
+
+    text = text.replace(GPS_COORDS_REGEX, () => {
+      piiTotals.locations = (piiTotals.locations || 0) + 1;
+      count++;
+      return '[LOCATION-COORDS-REDACTED]';
+    });
+
+    // IP addresses, MAC addresses, and IMEI/UDID/device tracking identifiers
+    text = text.replace(MAC_ADDRESS_REGEX, () => {
+      piiTotals.network_and_devices = (piiTotals.network_and_devices || 0) + 1;
+      count++;
+      return '[DEVICE-ID-REDACTED]';
+    });
+
+    text = text.replace(DEVICE_SERIAL_REGEX, () => {
+      piiTotals.network_and_devices = (piiTotals.network_and_devices || 0) + 1;
+      count++;
+      return '[DEVICE-ID-REDACTED]';
+    });
+
+    text = text.replace(IPV4_REGEX, () => {
+      piiTotals.network_and_devices = (piiTotals.network_and_devices || 0) + 1;
+      count++;
+      return '[IP-REDACTED]';
+    });
+
+    text = text.replace(TRACKING_BEACON_URL_REGEX, () => {
+      piiTotals.network_and_devices = (piiTotals.network_and_devices || 0) + 1;
+      count++;
+      return '[TRACKING-BEACON-REDACTED]';
+    });
+
+    text = text.replace(URL_TRACKING_PARAM_REGEX, '$1[TRACKING-PARAM-STRIPPED]');
 
     // Physical street addresses
     text = text.replace(STREET_ADDRESS_REGEX, () => {
