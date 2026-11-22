@@ -17,9 +17,13 @@ import {
   deleteEvidence,
   getEvidenceBuffer,
   getEvidenceById,
+  getStorageCounts,
   hasEvidenceHash,
   listEvidence,
   listEvents,
+  searchEvidence,
+  searchEvents,
+  unifiedFullTextSearch,
   updateEvent,
   updateEvidencePostAnalysis,
 } from './server/store.ts';
@@ -49,11 +53,44 @@ app.use((_req, res, next) => {
 });
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok' });
+  res.json({ status: 'ok', storage: 'sqlite', ...getStorageCounts() });
 });
 
-app.get('/api/evidence', (_req, res) => {
-  res.json({ evidence: listEvidence() });
+app.get('/api/evidence', (req, res) => {
+  const search = typeof req.query.search === 'string' ? req.query.search : '';
+  const docCategory =
+    typeof req.query.document_category === 'string' ? req.query.document_category : '';
+  const platform =
+    typeof req.query.detected_platform === 'string' ? req.query.detected_platform : '';
+
+  const evidence = searchEvidence({
+    search,
+    document_category: docCategory,
+    detected_platform: platform,
+  });
+  res.json({ evidence });
+});
+
+app.get('/api/search', (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q : '';
+  if (!q.trim()) {
+    res.json({
+      query: '',
+      fts_query: null,
+      total_hits: 0,
+      evidence_hits: [],
+      event_hits: [],
+    });
+    return;
+  }
+
+  const scopeRaw = typeof req.query.scope === 'string' ? req.query.scope : 'all';
+  const scope =
+    scopeRaw === 'evidence' || scopeRaw === 'events' ? scopeRaw : 'all';
+  const limitRaw = Number.parseInt(String(req.query.limit ?? '50'), 10);
+  const limit = Number.isNaN(limitRaw) ? 50 : Math.max(1, Math.min(200, limitRaw));
+
+  res.json(unifiedFullTextSearch(q, { scope, limit }));
 });
 
 app.post('/api/evidence/upload', upload.single('file'), async (req, res) => {
@@ -89,60 +126,74 @@ app.post('/api/evidence/upload', upload.single('file'), async (req, res) => {
       buffer
     );
 
-    const evidence = createEvidence(
-      {
-        filename: originalname,
-        file_size: size,
-        file_hash: fileHash,
-        upload_date: new Date().toISOString(),
-        detected_platform: platform,
-        document_category: documentCategory,
-        total_messages_parsed: messages.length,
-        flagged_events_count: 0,
-        pii_sanitized: sanitizePii,
-        pii_redactions: {
-          emails: 0,
-          phones: 0,
-          ssn: 0,
-          financial: 0,
-          medical_ids: 0,
-          addresses: 0,
-          dob: 0,
+    let createdEvidenceId: number | null = null;
+    try {
+      const evidence = createEvidence(
+        {
+          filename: originalname,
+          file_size: size,
+          file_hash: fileHash,
+          upload_date: new Date().toISOString(),
+          detected_platform: platform,
+          document_category: documentCategory,
+          total_messages_parsed: messages.length,
+          flagged_events_count: 0,
+          pii_sanitized: sanitizePii,
+          pii_redactions: {
+            emails: 0,
+            phones: 0,
+            ssn: 0,
+            financial: 0,
+            medical_ids: 0,
+            addresses: 0,
+            dob: 0,
+          },
+          ocr_used: ocrUsed,
+          ocr_confidence: ocrConfidence,
+          attribution_summary: {
+            verified_strict: 0,
+            inferred_needs_review: 0,
+            ambiguous_warning: 0,
+          },
+          party_tokens: [],
         },
-        ocr_used: ocrUsed,
-        ocr_confidence: ocrConfidence,
-        attribution_summary: {
-          verified_strict: 0,
-          inferred_needs_review: 0,
-          ambiguous_warning: 0,
-        },
-        party_tokens: [],
-      },
-      buffer
-    );
+        buffer
+      );
+      createdEvidenceId = evidence.id;
 
-    const { events: persistedEvents, sanitization } = runAnalysisPipeline(messages, evidence, {
-      tzName,
-      windowSize,
-      sanitizePii,
-      selfParty,
-      counterParty,
-    });
+      const { events: persistedEvents, sanitization, full_text_index } = runAnalysisPipeline(
+        messages,
+        evidence,
+        {
+          tzName,
+          windowSize,
+          sanitizePii,
+          selfParty,
+          counterParty,
+        }
+      );
 
-    updateEvidencePostAnalysis(evidence.id, {
-      flagged_events_count: persistedEvents.length,
-      pii_redactions: sanitization.pii_redactions,
-      attribution_summary: sanitization.attribution_summary,
-      party_tokens: sanitization.party_tokens,
-    });
+      updateEvidencePostAnalysis(evidence.id, {
+        flagged_events_count: persistedEvents.length,
+        pii_redactions: sanitization.pii_redactions,
+        attribution_summary: sanitization.attribution_summary,
+        party_tokens: sanitization.party_tokens,
+        full_text_index,
+      });
 
-    res.status(201).json({
-      evidence: getEvidenceById(evidence.id),
-      events_created: persistedEvents.length,
-      events: persistedEvents,
-      sanitization_summary: sanitization.pii_redactions,
-      attribution_summary: sanitization.attribution_summary,
-    });
+      res.status(201).json({
+        evidence: getEvidenceById(evidence.id),
+        events_created: persistedEvents.length,
+        events: persistedEvents,
+        sanitization_summary: sanitization.pii_redactions,
+        attribution_summary: sanitization.attribution_summary,
+      });
+    } catch (innerErr) {
+      if (createdEvidenceId !== null) {
+        deleteEvidence(createdEvidenceId);
+      }
+      throw innerErr;
+    }
   } catch (err) {
     if (err instanceof FileValidationError) {
       res.status(400).json({ error: err.message });
@@ -185,86 +236,38 @@ app.delete('/api/evidence/:id', (req, res) => {
 });
 
 app.get('/api/events', (req, res) => {
-  let events = listEvents();
-
   const severityParam = typeof req.query.severity === 'string' ? req.query.severity : '';
-  if (severityParam && severityParam !== 'all') {
-    const sev = Number.parseInt(severityParam, 10);
-    if (!Number.isNaN(sev)) {
-      events = events.filter((e) => e.severity_score === sev);
-    }
-  }
+  const severity =
+    severityParam && severityParam !== 'all' ? Number.parseInt(severityParam, 10) : undefined;
 
   const verifiedParam = typeof req.query.is_verified === 'string' ? req.query.is_verified : '';
-  if (verifiedParam === 'true') {
-    events = events.filter((e) => e.is_verified);
-  } else if (verifiedParam === 'false') {
-    events = events.filter((e) => !e.is_verified);
-  }
-
-  const platformParam = typeof req.query.source_platform === 'string' ? req.query.source_platform : '';
-  if (platformParam && platformParam !== 'all') {
-    events = events.filter((e) => e.source_platform === platformParam);
-  }
+  const isVerified =
+    verifiedParam === 'true' ? true : verifiedParam === 'false' ? false : undefined;
 
   const evidenceIdParam = typeof req.query.evidence_id === 'string' ? req.query.evidence_id : '';
-  if (evidenceIdParam && evidenceIdParam !== 'all') {
-    const evId = Number.parseInt(evidenceIdParam, 10);
-    if (!Number.isNaN(evId)) {
-      events = events.filter((e) => e.evidence_id === evId);
-    }
-  }
+  const evidenceId =
+    evidenceIdParam && evidenceIdParam !== 'all'
+      ? Number.parseInt(evidenceIdParam, 10)
+      : undefined;
 
-  const dateFrom = typeof req.query.date_from === 'string' ? req.query.date_from : '';
-  if (dateFrom) {
-    const fromMs = new Date(dateFrom).getTime();
-    if (!Number.isNaN(fromMs)) {
-      events = events.filter((e) => e.timestamp && new Date(e.timestamp).getTime() >= fromMs);
-    }
-  }
+  const sortParam = req.query.sort === 'relevance' ? 'relevance' : 'chronological';
 
-  const dateTo = typeof req.query.date_to === 'string' ? req.query.date_to : '';
-  if (dateTo) {
-    const toMs = new Date(dateTo + 'T23:59:59.999Z').getTime();
-    if (!Number.isNaN(toMs)) {
-      events = events.filter((e) => e.timestamp && new Date(e.timestamp).getTime() <= toMs);
-    }
-  }
-
-  const wheelParam = typeof req.query.wheel === 'string' ? req.query.wheel : '';
-  if (wheelParam && wheelParam !== 'all') {
-    events = events.filter((e) => e.all_flags.some((f) => f.wheel === wheelParam));
-  }
-
-  const docCatParam =
-    typeof req.query.document_category === 'string' ? req.query.document_category : '';
-  if (docCatParam && docCatParam !== 'all') {
-    events = events.filter((e) => e.document_category === docCatParam);
-  }
-
-  const attrParam =
-    typeof req.query.attribution_status === 'string' ? req.query.attribution_status : '';
-  if (attrParam && attrParam !== 'all') {
-    events = events.filter((e) => e.attribution_audit.status === attrParam);
-  }
-
-  const search = typeof req.query.search === 'string' ? req.query.search.trim().toLowerCase() : '';
-  if (search) {
-    events = events.filter(
-      (e) =>
-        e.content.toLowerCase().includes(search) ||
-        e.sender.toLowerCase().includes(search) ||
-        e.receiver.toLowerCase().includes(search) ||
-        e.placement_citation.citation_label.toLowerCase().includes(search) ||
-        e.user_context_notes.toLowerCase().includes(search) ||
-        e.matched_indicators.some((ind) => ind.toLowerCase().includes(search)) ||
-        e.all_flags.some(
-          (f) =>
-            f.wheel.toLowerCase().includes(search) ||
-            f.category.toLowerCase().includes(search)
-        )
-    );
-  }
+  const events = searchEvents({
+    search: typeof req.query.search === 'string' ? req.query.search : undefined,
+    severity: severity !== undefined && !Number.isNaN(severity) ? severity : undefined,
+    is_verified: isVerified,
+    source_platform:
+      typeof req.query.source_platform === 'string' ? req.query.source_platform : undefined,
+    evidence_id: evidenceId !== undefined && !Number.isNaN(evidenceId) ? evidenceId : undefined,
+    date_from: typeof req.query.date_from === 'string' ? req.query.date_from : undefined,
+    date_to: typeof req.query.date_to === 'string' ? req.query.date_to : undefined,
+    wheel: typeof req.query.wheel === 'string' ? req.query.wheel : undefined,
+    document_category:
+      typeof req.query.document_category === 'string' ? req.query.document_category : undefined,
+    attribution_status:
+      typeof req.query.attribution_status === 'string' ? req.query.attribution_status : undefined,
+    sort: sortParam,
+  });
 
   res.json({ events });
 });

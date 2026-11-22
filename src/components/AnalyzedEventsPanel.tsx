@@ -11,21 +11,25 @@ import {
   X,
 } from 'lucide-react';
 import type { AnalyzedEventRecord, AttributionStatus } from '../types.ts';
+import { HighlightedSnippet } from './HighlightedSnippet.tsx';
+
+export interface EventFilters {
+  severity: string;
+  is_verified: string;
+  source_platform: string;
+  wheel: string;
+  document_category: string;
+  attribution_status: string;
+  date_from: string;
+  date_to: string;
+  search: string;
+  sort: 'chronological' | 'relevance';
+}
 
 interface AnalyzedEventsPanelProps {
   events: AnalyzedEventRecord[];
-  filters: {
-    severity: string;
-    is_verified: string;
-    source_platform: string;
-    wheel: string;
-    document_category: string;
-    attribution_status: string;
-    date_from: string;
-    date_to: string;
-    search: string;
-  };
-  onFiltersChange: (next: AnalyzedEventsPanelProps['filters']) => void;
+  filters: EventFilters;
+  onFiltersChange: (next: EventFilters) => void;
   onEventUpdated: () => Promise<void>;
 }
 
@@ -124,16 +128,28 @@ export function AnalyzedEventsPanel({
       <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-xs space-y-3">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
           <div className="lg:col-span-2">
-            <label className="block text-xs font-medium text-slate-600">Search</label>
+            <label className="block text-xs font-medium text-slate-600">
+              Full-Text Search (FTS5: <code className="text-[11px]">"phrase"</code>, <code>OR</code>, <code>NOT</code>, <code>word*</code>)
+            </label>
             <div className="relative mt-1">
               <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
               <input
                 type="text"
                 value={filters.search}
                 onChange={(e) => onFiltersChange({ ...filters, search: e.target.value })}
-                placeholder="Sender, receiver, citation, tactic..."
-                className="block w-full rounded-md border border-slate-300 py-1.5 pl-8 pr-3 text-sm text-slate-800"
+                placeholder="Search content, sender, citation, tactic, notes..."
+                className="block w-full rounded-md border border-slate-300 py-1.5 pl-8 pr-8 text-sm text-slate-800"
               />
+              {filters.search && (
+                <button
+                  type="button"
+                  onClick={() => onFiltersChange({ ...filters, search: '' })}
+                  aria-label="Clear event search"
+                  className="absolute right-2 top-2 rounded p-0.5 text-slate-400 hover:text-slate-700"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
             </div>
           </div>
 
@@ -202,7 +218,7 @@ export function AnalyzedEventsPanel({
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <div>
             <label className="block text-xs font-medium text-slate-600">Attribution Check</label>
             <select
@@ -260,6 +276,23 @@ export function AnalyzedEventsPanel({
               onChange={(e) => onFiltersChange({ ...filters, date_to: e.target.value })}
               className="mt-1 block w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-sm text-slate-800"
             />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-600">Sort Order</label>
+            <select
+              value={filters.sort}
+              onChange={(e) =>
+                onFiltersChange({
+                  ...filters,
+                  sort: e.target.value === 'relevance' ? 'relevance' : 'chronological',
+                })
+              }
+              className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-800"
+            >
+              <option value="chronological">Chronological</option>
+              <option value="relevance">Search Relevance (BM25)</option>
+            </select>
           </div>
         </div>
       </div>
@@ -377,6 +410,13 @@ export function AnalyzedEventsPanel({
                 <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800 whitespace-pre-wrap">
                   {event.content}
                 </div>
+
+                {event.search_snippet && (
+                  <div className="mt-2 rounded border border-amber-200 bg-amber-50/70 px-3 py-1.5 text-xs text-slate-700">
+                    <span className="font-semibold text-amber-900">Search Match: </span>
+                    <HighlightedSnippet snippet={event.search_snippet} />
+                  </div>
+                )}
 
                 {event.all_flags.length > 0 && (
                   <div className="mt-3 space-y-2">

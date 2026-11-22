@@ -6,7 +6,7 @@ import {
   normalizeMessages,
 } from './normalization.ts';
 import { sanitizeAndVerifyBatch, type BatchSanitizationOutput } from './piiSanitizer.ts';
-import { createAnalyzedEvent } from './store.ts';
+import { createAnalyzedEventsBatch } from './store.ts';
 import type {
   AnalyzedEventRecord,
   ForensicEvidenceRecord,
@@ -27,6 +27,7 @@ export interface PipelineOptions {
 export interface PipelineResult {
   events: AnalyzedEventRecord[];
   sanitization: BatchSanitizationOutput;
+  full_text_index: string;
 }
 
 export function runAnalysisPipeline(
@@ -58,6 +59,7 @@ export function runAnalysisPipeline(
           ambiguous_warning: 0,
         },
       },
+      full_text_index: '',
     };
   }
 
@@ -71,6 +73,15 @@ export function runAnalysisPipeline(
   const sanitizedMsgs = sanitization.items.map((item) => item.message);
   const normalized = normalizeMessages(sanitizedMsgs);
 
+  const fullTextIndex = sanitization.items
+    .map((item, idx) => {
+      const m = item.message;
+      const citation = rawMessages[idx]?.placement?.citation_label || '';
+      const subj = item.subject ? `Subject: ${item.subject} ` : '';
+      return `[${m.sender} -> ${item.receiver}] ${subj}${citation} ${m.content}`.trim();
+    })
+    .join('\n');
+
   // 2. Analyze sanitized content across all 62 corpus tactics
   const analysisResults = normalized.map((msg) => engine.analyzeMessage(msg.content));
   const flaggedIndices = analysisResults
@@ -78,7 +89,7 @@ export function runAnalysisPipeline(
     .filter((idx) => idx !== -1);
 
   if (flaggedIndices.length === 0) {
-    return { events: [], sanitization };
+    return { events: [], sanitization, full_text_index: fullTextIndex };
   }
 
   const windows = flaggedIndices.map((idx) =>
@@ -96,7 +107,7 @@ export function runAnalysisPipeline(
   };
 
   const hashShort = evidenceObj.file_hash.slice(0, 8);
-  const persisted: AnalyzedEventRecord[] = [];
+  const pendingEvents: Omit<AnalyzedEventRecord, 'id'>[] = [];
 
   for (const i of flaggedIndices) {
     const msg = normalized[i];
@@ -142,7 +153,7 @@ export function runAnalysisPipeline(
       ? `[Auto] Citation: ${basePlacement.citation_label}; Attribution: ${sanItem.attribution_audit.status} (${msg.sender} -> ${sanItem.receiver}); Tactics (${result.tactics_analyzed.length}): ${flagsSummary}; indicators=[${indicatorsSummary}]; day_slice=${daySliceCount} msgs; window=[${winStart},${winEnd}] (${windowCount} msgs)`
       : '';
 
-    const event = createAnalyzedEvent({
+    pendingEvents.push({
       evidence_id: evidenceObj.id,
       evidence_filename: evidenceObj.filename,
       timestamp: ts,
@@ -167,9 +178,8 @@ export function runAnalysisPipeline(
       raw_content_hash: sanItem.raw_content_hash,
       pii_redacted_count: sanItem.pii_redacted_count,
     });
-
-    persisted.push(event);
   }
 
-  return { events: persisted, sanitization };
+  const persisted = createAnalyzedEventsBatch(pendingEvents);
+  return { events: persisted, sanitization, full_text_index: fullTextIndex };
 }

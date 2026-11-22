@@ -21,7 +21,7 @@ The application runs as a full-stack TypeScript web application on **Node.js 22*
 | `server/chronologyEngine.ts` | Event Sectioner & Chronology builder grouping cross-source events by day, month, document category, or framework with exact file, SHA-256 prefix, and page/row/line/XML/OCR placement citations |
 | `server/normalization.ts` | Message normalization, DST-safe `localDayBounds`, and merged context-window generation |
 | `server/analysisPipeline.ts` | Runs PII sanitization + attribution verification, `CoerciveControlEngine`, context windowing, and persists `placement_citation` + `attribution_audit` on flagged events |
-| `server/store.ts` | In-memory evidence & event store enforcing unique SHA-256 `file_hash` chain-of-custody |
+| `server/store.ts` | Persistent SQLite (`node:sqlite` WAL mode), FTS5 full-text search index (`evidence_fts`, `events_fts` with `porter unicode61` & BM25 ranking), & SHA-256 evidence vault (`data/forensic_evidence.db`, `data/vault/`) |
 | `server.ts` | Express server on port `3000` (`0.0.0.0`) serving `/api/*` endpoints and Vite SPA / production `dist/` |
 | `src/components/` | React UI: `EvidenceUploadPanel`, `AnalyzedEventsPanel`, `ChronologySectionerPanel`, `TimelineChart`, and `MessageAnalyzerPanel` |
 
@@ -78,11 +78,12 @@ Every call to `POST /api/analyze` returns:
 | `GET /api/health` | Health check (`{ status: "ok" }`) |
 | `GET /api/tactics` | Returns all 62 analyzed tactic categories, framework list, rule counts, descriptions, and academic citations |
 | `POST /api/analyze` | Screens a single message `{ text }` and returns full `AnalysisResult` with `tactics_analyzed` |
-| `GET /api/evidence` | Lists ingested evidence records and SHA-256 metadata |
-| `POST /api/evidence/upload` | Validates, hashes, parses (`.eml`, `.csv`, `.xml`, `.docx`, `.pdf`, `.txt`, `.json`, `.rtf`, `.html`, images via OCR), sanitizes PII with strict attribution verification, and runs `runAnalysisPipeline` |
-| `GET /api/evidence/:id/verify-hash` | Re-computes SHA-256 against buffered evidence bytes to verify integrity |
-| `DELETE /api/evidence/:id` | Deletes an evidence record and its associated events |
-| `GET /api/events` | Lists flagged events with optional `severity`, `wheel`, `document_category`, `attribution_status`, `is_verified`, `source_platform`, `date_from`, `date_to`, and `search` filters |
+| `GET /api/evidence` | Lists or FTS5-searches (`?search=`, `document_category`, `detected_platform`) ingested evidence records and extracted full document text |
+| `GET /api/search` | Unified FTS5 full-text search (`?q=`, `scope=all\|evidence\|events`, `limit=`) returning BM25-ranked evidence & event matches with highlighted snippets |
+| `POST /api/evidence/upload` | Validates, hashes, parses (`.eml`, `.csv`, `.xml`, `.docx`, `.pdf`, `.txt`, `.json`, `.rtf`, `.html`, images via OCR), sanitizes PII with strict attribution verification, indexes full text, and runs `runAnalysisPipeline` |
+| `GET /api/evidence/:id/verify-hash` | Re-computes SHA-256 against stored vault evidence bytes to verify integrity |
+| `DELETE /api/evidence/:id` | Deletes an evidence record, its FTS5 entries, its vault file, and its associated events |
+| `GET /api/events` | Lists or FTS5-searches flagged events with `severity`, `wheel`, `document_category`, `attribution_status`, `is_verified`, `source_platform`, `date_from`, `date_to`, `search`, and `sort=chronological\|relevance` |
 | `PATCH /api/events/:id` | Updates `is_verified`, `user_context_notes`, `sender`, `receiver`, or `timestamp` |
 | `GET /api/chronology` | Returns sectioned cross-source event chronology (`section_by=day|month|source|framework`) with exact file & placement citations |
 | `GET /api/timeline` | Returns verified (`is_verified = true`) events with non-null timestamps for plotting |
@@ -132,7 +133,7 @@ npm start
 │   ├── ocrEngine.ts           # Local sharp + tesseract.js OCR engine
 │   ├── parsers.ts             # EML, CSV, XML, DOCX, PDF, WhatsApp, Facebook, Discord, OCR, Generic
 │   ├── piiSanitizer.ts        # Role-locked PII redaction + attribution verification checks
-│   ├── store.ts               # In-memory forensic evidence & event store
+│   ├── store.ts               # Persistent Node SQLite + local SHA-256 evidence vault store
 │   └── types.ts               # Backend TypeScript interfaces
 ├── src/
 │   ├── App.tsx                # Workbench shell & navigation

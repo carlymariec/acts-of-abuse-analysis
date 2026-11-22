@@ -5,13 +5,23 @@ import {
   FileUp,
   Lock,
   ScanText,
+  Search,
   ShieldCheck,
   Trash2,
+  X,
 } from 'lucide-react';
 import type { ForensicEvidenceRecord } from '../types.ts';
+import { HighlightedSnippet } from './HighlightedSnippet.tsx';
+
+export interface EvidenceFilters {
+  search: string;
+  document_category: string;
+}
 
 interface EvidenceUploadPanelProps {
   evidenceList: ForensicEvidenceRecord[];
+  evidenceFilters: EvidenceFilters;
+  onEvidenceFiltersChange: (next: EvidenceFilters) => void;
   onUploaded: () => Promise<void>;
   onDeleted: () => Promise<void>;
 }
@@ -31,6 +41,8 @@ const ACCEPTED_FILE_ATTR =
 
 export function EvidenceUploadPanel({
   evidenceList,
+  evidenceFilters,
+  onEvidenceFiltersChange,
   onUploaded,
   onDeleted,
 }: EvidenceUploadPanelProps) {
@@ -246,15 +258,71 @@ export function EvidenceUploadPanel({
       </div>
 
       <div className="rounded-lg border border-slate-200 bg-white shadow-xs overflow-hidden">
-        <div className="border-b border-slate-200 px-6 py-4">
-          <h3 className="text-base font-semibold text-slate-900">
-            Forensic Evidence Chain of Custody ({evidenceList.length})
-          </h3>
+        <div className="border-b border-slate-200 px-6 py-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-base font-semibold text-slate-900">
+              Forensic Evidence Chain of Custody ({evidenceList.length})
+            </h3>
+            <span className="text-xs text-slate-500">
+              Persisted locally in SQLite &amp; SHA-256 evidence vault · FTS5 full-text indexed
+            </span>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="sm:col-span-2 relative">
+              <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
+              <input
+                type="text"
+                value={evidenceFilters.search}
+                onChange={(e) =>
+                  onEvidenceFiltersChange({ ...evidenceFilters, search: e.target.value })
+                }
+                placeholder='Search filenames, SHA-256, parties &amp; extracted document text (e.g. "joint account" OR passport*)'
+                className="block w-full rounded-md border border-slate-300 py-1.5 pl-8 pr-8 text-sm text-slate-800"
+              />
+              {evidenceFilters.search && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onEvidenceFiltersChange({ ...evidenceFilters, search: '' })
+                  }
+                  aria-label="Clear evidence search"
+                  className="absolute right-2 top-2 rounded p-0.5 text-slate-400 hover:text-slate-700"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+
+            <div>
+              <select
+                value={evidenceFilters.document_category}
+                onChange={(e) =>
+                  onEvidenceFiltersChange({
+                    ...evidenceFilters,
+                    document_category: e.target.value,
+                  })
+                }
+                className="block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-800"
+              >
+                <option value="all">All Document Types</option>
+                <option value="email">Emails (.eml)</option>
+                <option value="court_document">Court Documents</option>
+                <option value="medical_document">Medical Documents</option>
+                <option value="personal_communication">Personal Communications</option>
+                <option value="spreadsheet_log">Spreadsheet Logs (.csv)</option>
+                <option value="screenshot_ocr">OCR Screenshots</option>
+                <option value="generic_document">General Documents</option>
+              </select>
+            </div>
+          </div>
         </div>
 
         {evidenceList.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-500">
-            No evidence files ingested yet. Upload an email, spreadsheet, court/medical document, chat export, or screenshot above.
+            {evidenceFilters.search || evidenceFilters.document_category !== 'all'
+              ? 'No evidence files match your current full-text search or category filter.'
+              : 'No evidence files ingested yet. Upload an email, spreadsheet, court/medical document, chat export, or screenshot above.'}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -289,6 +357,12 @@ export function EvidenceUploadPanel({
                           <div className="mt-1 inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs font-normal text-slate-700">
                             <ScanText className="h-3 w-3" />
                             Local OCR ({ev.ocr_confidence ?? 0}% conf)
+                          </div>
+                        )}
+                        {ev.search_snippet && (
+                          <div className="mt-1.5 rounded border border-amber-200 bg-amber-50/60 px-2 py-1 text-xs font-normal text-slate-700">
+                            <span className="font-medium text-amber-900">Match: </span>
+                            <HighlightedSnippet snippet={ev.search_snippet} />
                           </div>
                         )}
                       </td>

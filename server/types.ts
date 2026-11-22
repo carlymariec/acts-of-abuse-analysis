@@ -140,6 +140,8 @@ export interface ForensicEvidenceRecord {
     ambiguous_warning: number;
   };
   party_tokens: PartyTokenMapping[];
+  search_snippet?: string;
+  search_rank?: number;
 }
 
 export interface AnalyzedEventRecord {
@@ -167,6 +169,8 @@ export interface AnalyzedEventRecord {
   attribution_audit: AttributionAudit;
   raw_content_hash: string;
   pii_redacted_count: number;
+  search_snippet?: string;
+  search_rank?: number;
 }
 
 export interface ChronologySection {
