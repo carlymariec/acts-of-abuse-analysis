@@ -53,7 +53,7 @@ function extractPartyInfo(raw: string): ExtractedParty {
   const email = emailMatch ? emailMatch[1].toLowerCase() : null;
 
   let display = trimmed
-    .replace(/<[^>]+>/g, '')
+    .replace(/[<>]/g, '')
     .replace(/["']/g, '')
     .trim();
 
